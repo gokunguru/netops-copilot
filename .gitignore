@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
+.env
+*.pem
+*.key
+
+# Containerlab runtime
+clab-*/
+lab/*.bak
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
