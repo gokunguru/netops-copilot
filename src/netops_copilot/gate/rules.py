@@ -14,6 +14,10 @@ FORBIDDEN_PATTERNS = [
 
 MAX_COMMANDS_PER_DEVICE = 50
 
+# VLAN 1 (default) and Cisco reserved range must never be touched by the agent.
+PROTECTED_VLANS = {1, 1002, 1003, 1004, 1005}
+VLAN_REF = re.compile(r"\bvlan\s+(?:batch\s+)?(\d+)", re.IGNORECASE)
+
 
 def check(intent: Intent, changes: list[ProposedChange]) -> GateResult:
     violations: list[str] = []
@@ -35,6 +39,10 @@ def check(intent: Intent, changes: list[ProposedChange]) -> GateResult:
                 if re.search(pattern, cmd, re.IGNORECASE):
                     violations.append(f"{change.device}: forbidden command '{cmd.strip()}'")
                     break
+            # 4. VLAN ID sanity.
+            for vid in (int(v) for v in VLAN_REF.findall(cmd)):
+                if vid in PROTECTED_VLANS or not 2 <= vid <= 4094:
+                    violations.append(f"{change.device}: protected or invalid VLAN {vid} in '{cmd.strip()}'")
 
     verdict = Verdict.REJECT if violations else Verdict.PASS
     return GateResult(verdict=verdict, violations=violations)

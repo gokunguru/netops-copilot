@@ -1,0 +1,11 @@
+# Lab inventory: hostname -> vendor and config file.
+devices:
+  site-a:
+    vendor: cisco_ios
+    config: configs/site-a.cfg
+  site-b:
+    vendor: huawei_vrp
+    config: configs/site-b.cfg
+  core:
+    vendor: cisco_ios
+    config: configs/core.cfg

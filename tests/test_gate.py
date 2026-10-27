@@ -29,3 +29,11 @@ def test_forbidden_command_rejected_huawei():
     changes = [ProposedChange(device="site-a", vendor=Vendor.HUAWEI_VRP,
                               commands=["vlan batch 30", "undo local-user admin"])]
     assert check(make_intent(["site-a"]), changes).verdict == Verdict.REJECT
+
+
+def test_protected_vlan_rejected():
+    changes = [ProposedChange(device="site-a", vendor=Vendor.CISCO_IOS,
+                              commands=["vlan 1", " name HACKED"])]
+    result = check(make_intent(["site-a"]), changes)
+    assert result.verdict == Verdict.REJECT
+    assert "protected or invalid VLAN 1" in result.violations[0]

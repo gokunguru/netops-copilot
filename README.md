@@ -27,14 +27,47 @@ On failure at step 3 or 4, the agent loops back to step 2 with the errors in con
 
 ## Use cases (hackathon scope)
 
-- [ ] VLAN provisioning
+- [x] VLAN provisioning (Cisco IOS + Huawei VRP), end to end
 - [ ] ACL compliance audit
 - [ ] QoS policy check
 
+## Demo
+
+```bash
+netops-copilot "Create VLAN 30 named users on site-a and site-b"          # real run on Muse Spark
+netops-copilot "Create VLAN 30 named users on site-a and site-b" --mock   # offline, no API key
+netops-copilot "Create VLAN 30 named users on site-a" --mock-faulty       # shows the retry loop
+```
+
+`--mock-faulty` makes the model first propose a change that silently deletes VLAN 20. The dry-run post-checks catch it, the errors go back to the model, and the second attempt is clean:
+
+```
+Attempt 1: gate PASS, dry-run FAILED -> FAILED
+  site-a (cisco_ios): vlan 30 | name USERS | no vlan 20
+  ! site-a: post-check failed, existing VLAN 20 removed
+
+Attempt 2: gate PASS, dry-run OK -> OK
+  site-a (cisco_ios): vlan 30 | name USERS
+```
+
+The safety layers are independent:
+
+| Layer | Catches | LLM involved |
+|---|---|---|
+| Intent validation | unknown devices, invalid VLAN id or name | no |
+| Safety gate | out-of-scope devices, forbidden commands (`reload`, `no router`, `undo local-user`…), VLAN 1 and reserved ranges | no |
+| Dry-run post-checks | wrong-vendor syntax, missing VLAN, existing VLAN removed or renamed, collateral VLANs | no |
+| Human approval | everything else | no |
+
+## Current status
+
+- The dry-run currently runs on an **offline config simulator** (`lab/simulator.py`) that applies commands to a model of each device's VLAN table with vendor-specific grammar. A Containerlab-backed runner is the next milestone.
+- Nothing is pushed to devices yet: the approval step is the end of the pipeline.
+
 ## Stack
 
-- **Models**: Muse Spark via Meta Model API (Muse Spark Open via partner inference, if available)
-- **Agent**: Python 3.11+
+- **Models**: Muse Spark (`muse-spark-1.3`) via Meta Model API, OpenAI-compatible endpoint (Muse Spark Open via partner inference, if available)
+- **Agent**: Python 3.11+, Pydantic for every LLM output
 - **Lab**: Containerlab + FRRouting
 - **Automation**: Ansible
 - **UI**: TBD
@@ -47,7 +80,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest
+pytest                 # 11 tests, no API key needed
 ```
 
 ## Built during the hackathon
@@ -57,7 +90,6 @@ Everything in this repository was written during the event (Oct 26 – Nov 4, 20
 **Prior work and third-party resources**, not counted as hackathon work:
 
 - My background in network automation (Ansible/Python on multi-vendor WAN) shaped the problem and use cases. No code or configuration from previous work is reused.
-- [NetDevOps Agent Skills](https://github.com/vsachin094/netdevops-agent-skills) by Sachin Verma, if used as agent context. Credited per its license.
 
 ## License
 

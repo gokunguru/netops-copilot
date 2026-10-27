@@ -16,6 +16,17 @@ class ChangeType(str, Enum):
     QOS_CHECK = "qos_check"
 
 
+class Device(BaseModel):
+    hostname: str
+    vendor: Vendor
+    config: str
+
+
+class VlanParams(BaseModel):
+    vlan_id: int = Field(ge=1, le=4094)
+    name: str = Field(min_length=1, max_length=31, pattern=r"^[A-Za-z0-9_-]+$")
+
+
 class Intent(BaseModel):
     """Structured version of a plain-language change request."""
 
@@ -26,7 +37,7 @@ class Intent(BaseModel):
 
 
 class ProposedChange(BaseModel):
-    """Config generated for one device."""
+    """Config generated for one device, in configuration-mode commands."""
 
     device: str
     vendor: Vendor
@@ -41,3 +52,33 @@ class Verdict(str, Enum):
 class GateResult(BaseModel):
     verdict: Verdict
     violations: list[str] = Field(default_factory=list)
+
+
+class Attempt(BaseModel):
+    """One generate -> gate -> dry-run round."""
+
+    number: int
+    changes: list[ProposedChange]
+    gate: GateResult
+    dry_run_errors: list[str] = Field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.gate.verdict == Verdict.PASS and not self.dry_run_errors
+
+
+class RunResult(BaseModel):
+    request: str
+    intent: Intent | None = None
+    attempts: list[Attempt] = Field(default_factory=list)
+    diffs: dict[str, str] = Field(default_factory=dict)
+    explanation: str = ""
+    error: str = ""
+
+    @property
+    def ready_for_approval(self) -> bool:
+        return bool(self.attempts) and self.attempts[-1].ok and not self.error
+
+    @property
+    def final_changes(self) -> list[ProposedChange]:
+        return self.attempts[-1].changes if self.ready_for_approval else []
