@@ -1,5 +1,7 @@
 # NetOps Copilot
 
+[![CI](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml)
+
 > An AI agent that turns plain-language network change requests into validated, multi-vendor configs, with a deterministic safety gate, a lab dry-run and human approval before anything touches production.
 
 Built for the **Meta Global AI Developer Hackathon** (Indie track, theme: *Build for Your World*), Oct 26 – Nov 4, 2026.
@@ -85,6 +87,14 @@ The safety layers are independent:
 - The dry-run currently runs on an **offline config simulator** (`lab/simulator.py`) that applies commands to a model of each device's VLAN table with vendor-specific grammar. A Containerlab-backed runner is the next milestone.
 - Nothing is pushed to devices yet: the approval step is the end of the pipeline.
 
+## CI
+
+Every push runs [GitHub Actions](.github/workflows/ci.yml), with no API key and no network:
+
+- **lint**: `ruff`
+- **test**: the full test suite on Python 3.11, 3.12 and 3.13
+- **demo**: the three CLI demos end to end on the offline model, asserting the retry loop catches the destructive change and the ACL audit exits with code `3` on the non-compliant lab
+
 ## Stack
 
 - **Models**: Muse Spark (`muse-spark-1.3`) via Meta Model API, OpenAI-compatible endpoint (Muse Spark Open via partner inference, if available)
@@ -101,7 +111,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest                 # 21 tests, no API key needed
+pytest                 # 22 tests, no API key needed
 ```
 
 ## Built during the hackathon

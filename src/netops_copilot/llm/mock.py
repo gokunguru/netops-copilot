@@ -44,7 +44,7 @@ class MockLLM:
     def _parse(user: str) -> str:
         inventory = re.findall(r"^- (\S+) \(", user, re.MULTILINE)
         request = user.split("Request:", 1)[1]
-        if re.search(r"\b(audit|compliance|compliant|acl)\b", request, re.IGNORECASE):
+        if re.search(r"\b(audit|compliance|compliant|acls?)\b", request, re.IGNORECASE):
             return MockLLM._parse_audit(request, inventory)
         vid = re.search(r"vlan\s+(\d+)", request, re.IGNORECASE)
         name = re.search(r"(?:named|name|called)\s+([A-Za-z0-9_-]+)", request, re.IGNORECASE)

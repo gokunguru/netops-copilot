@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -v
+
+  demo:
+    # End-to-end runs of the CLI with the offline model: no API key, no network.
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+
+      - name: VLAN provisioning, multi-vendor
+        run: netops-copilot "Create VLAN 30 named users on site-a and site-b" --mock --yes
+
+      - name: Retry loop catches a destructive change
+        run: |
+          netops-copilot "Create VLAN 30 named users on site-a" --mock-faulty --yes | tee out.txt
+          grep -q "existing VLAN 20 removed" out.txt
+          grep -q "Attempt 2: gate PASS, dry-run OK" out.txt
+
+      - name: ACL audit flags the lab as non-compliant (exit code 3)
+        run: |
+          code=0
+          netops-copilot "Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs" --mock || code=$?
+          echo "exit code: $code"
+          test "$code" -eq 3

@@ -76,6 +76,7 @@ def test_no_inbound_acl():
 @pytest.mark.parametrize("request_text", [
     "Audit edge ACLs: block telnet and smb, allow https",
     "Telnet and SMB must be blocked and HTTPS allowed (compliance audit)",
+    "Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs",  # README demo
 ])
 def test_end_to_end_audit_on_lab(request_text):
     llm = MockLLM()
