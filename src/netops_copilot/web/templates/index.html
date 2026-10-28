@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NetOps Copilot</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx-2.0.4.min.js"></script>
+  <script src="/static/htmx-ext-sse-2.2.2.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">⌁</span> NetOps Copilot</div>
+    <div class="topbar-right">
+      {% if mock %}
+        <span class="badge badge-warn" title="Deterministic stand-in model, no API call">offline mock model</span>
+      {% else %}
+        <span class="badge badge-ok">Muse Spark · Meta Model API</span>
+      {% endif %}
+      <a class="link" href="/docs">API</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="side">
+      <section class="panel">
+        <h2>Change request</h2>
+        <form hx-post="/runs" hx-target="#runs" hx-swap="afterbegin"
+              hx-on::after-request="if (event.detail.successful) this.reset()">
+          <textarea name="request" rows="4" required
+            placeholder="e.g. Create VLAN 40 named cameras on site-b"></textarea>
+          <button class="btn btn-primary" type="submit">Run agent</button>
+        </form>
+        <div class="examples">
+          <span class="muted">Try:</span>
+          {% for ex in examples %}
+            {% if not ex.faulty or mock %}
+            <button class="chip" hx-post="/runs" hx-target="#runs" hx-swap="afterbegin"
+                    hx-vals='{{ {"request": ex.request, "faulty": "1" if ex.faulty else ""} | tojson }}'
+                    title="{{ ex.request }}">{{ ex.label }}</button>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Inventory</h2>
+        <ul class="inventory">
+          {% for d in devices %}
+            <li><span class="mono">{{ d.hostname }}</span>
+                <span class="vendor vendor-{{ d.vendor.value }}">{{ d.vendor.value | replace("_", " ") }}</span></li>
+          {% endfor %}
+        </ul>
+      </section>
+
+      <section class="panel guarantees">
+        <h2>Guarantees</h2>
+        <ul>
+          <li>Every model output is schema-validated</li>
+          <li>Safety gate and dry-run are deterministic: no LLM decides what is safe</li>
+          <li>Nothing is applied without human approval</li>
+        </ul>
+      </section>
+    </aside>
+
+    <section id="runs" class="runs">
+      <div class="empty muted">Runs appear here. Pick an example on the left to start.</div>
+    </section>
+  </main>
+</body>
+</html>

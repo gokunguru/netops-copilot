@@ -96,6 +96,15 @@ class Finding(BaseModel):
         return self.actual == self.flow.expected
 
 
+class Step(BaseModel):
+    """Progress event emitted by the pipeline after each step (used by the web UI)."""
+
+    name: Literal["parse", "generate", "gate", "dry_run", "explain", "audit"]
+    ok: bool
+    attempt: int | None = None
+    detail: str = ""
+
+
 class RunResult(BaseModel):
     request: str
     intent: Intent | None = None

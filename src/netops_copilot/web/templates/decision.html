@@ -1,0 +1,8 @@
+<div class="approval" id="decision-{{ run.id }}">
+  {% if run.decision == "approved" %}
+    <div class="callout callout-ok"><strong>Approved.</strong>
+      Push to devices is not implemented yet: the lab runner is the next milestone.</div>
+  {% else %}
+    <div class="callout"><strong>Rejected by operator.</strong> Nothing was applied.</div>
+  {% endif %}
+</div>

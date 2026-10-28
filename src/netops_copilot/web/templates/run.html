@@ -1,0 +1,12 @@
+<article class="run" id="run-{{ run.id }}"
+         hx-ext="sse" sse-connect="/runs/{{ run.id }}/events" sse-close="done">
+  <header class="run-head">
+    <span class="mono muted">#{{ run.id }}</span>
+    <p class="run-request">{{ run.request }}</p>
+    {% if run.faulty %}<span class="badge badge-warn">faulty model simulated</span>{% endif %}
+  </header>
+  <ol class="steps" sse-swap="step" hx-swap="beforeend"></ol>
+  <div sse-swap="result" hx-swap="innerHTML">
+    <div class="working"><span class="spinner"></span> agent working…</div>
+  </div>
+</article>

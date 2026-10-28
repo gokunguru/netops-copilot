@@ -15,10 +15,15 @@ dependencies = [
   "httpx>=0.27",
   "python-dotenv>=1",
   "pyyaml>=6",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
 netops-copilot = "netops_copilot.cli:main"
+netops-copilot-web = "netops_copilot.web.app:serve"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
@@ -26,9 +31,13 @@ dev = ["pytest>=8", "ruff>=0.5"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+netops_copilot = ["web/templates/*.html", "web/static/*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["src/netops_copilot/web/static"]

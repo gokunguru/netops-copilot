@@ -55,3 +55,16 @@ def test_wrong_vendor_syntax_rejected():
     import pytest
     with pytest.raises(simulator.SimulationError):
         simulator.apply(Vendor.HUAWEI_VRP, {}, ["no vlan 10"])
+
+
+def test_steps_are_emitted_in_order():
+    steps = []
+    run(MockLLM(faulty_first_generation=True), "Create VLAN 30 named users on site-a",
+        devices(), on_step=steps.append)
+    assert [(s.name, s.ok, s.attempt) for s in steps] == [
+        ("parse", True, None),
+        ("generate", True, 1), ("gate", True, 1), ("dry_run", False, 1),
+        ("generate", True, 2), ("gate", True, 2), ("dry_run", True, 2),
+        ("explain", True, None),
+    ]
+    assert "existing VLAN 20 removed" in steps[3].detail

@@ -1,0 +1,6 @@
+<li class="step {{ 'step-ok' if step.ok else 'step-fail' }}">
+  <span class="step-icon">{{ '✓' if step.ok else '✗' }}</span>
+  <span class="step-name">{{ labels[step.name] }}</span>
+  {% if step.attempt %}<span class="attempt">attempt {{ step.attempt }}</span>{% endif %}
+  {% if step.detail %}<span class="step-detail mono">{{ step.detail }}</span>{% endif %}
+</li>

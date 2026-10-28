@@ -1,0 +1,59 @@
+{% set res = run.result %}
+{% if run.error or (res and res.error) %}
+  <div class="callout callout-fail">
+    <strong>Stopped.</strong> <span class="mono">{{ run.error or res.error }}</span>
+    <p class="muted">Nothing was proposed, nothing was applied.</p>
+  </div>
+{% elif res.is_audit %}
+  {% set failed = res.findings | rejectattr("compliant") | list %}
+  <div class="verdict {{ 'verdict-ok' if res.compliant else 'verdict-fail' }}">
+    {{ 'COMPLIANT' if res.compliant else 'NON-COMPLIANT' }}
+    <span class="muted">· {{ failed | length }} of {{ res.findings | length }} checks failed</span>
+  </div>
+  <table class="findings">
+    <thead><tr><th></th><th>Device</th><th>Interface</th><th>ACL</th><th>Flow</th>
+      <th>Expected</th><th>Actual</th><th>Decided by</th></tr></thead>
+    <tbody>
+    {% for f in res.findings %}
+      <tr class="{{ '' if f.compliant else 'row-fail' }}">
+        <td><span class="pill {{ 'pill-ok' if f.compliant else 'pill-fail' }}">{{ 'OK' if f.compliant else 'FAIL' }}</span></td>
+        <td class="mono">{{ f.device }}</td><td class="mono">{{ f.interface }}</td>
+        <td class="mono">{{ f.acl }}</td>
+        <td class="mono">{{ f.flow.label }} <span class="muted">{{ f.flow.protocol }}/{{ f.flow.dst_port or 'any' }}</span></td>
+        <td>{{ f.flow.expected }}</td><td>{{ f.actual }}</td>
+        <td class="mono small">{{ f.matched }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="explanation"><h3>Explanation</h3><p>{{ res.explanation }}</p></div>
+  <p class="muted small">Read-only audit: no change proposed.</p>
+{% else %}
+  <div class="diffs">
+    {% for host, diff in res.diffs.items() %}
+      <div class="diff">
+        <div class="diff-head mono">{{ host }}
+          <span class="muted">{{ (res.final_changes | selectattr("device", "equalto", host) | first).vendor.value }}</span></div>
+        <pre>{% for line in diff.splitlines() %}{% if line.startswith('+++') or line.startswith('---') %}<span class="d-meta">{{ line }}</span>
+{% elif line.startswith('@@') %}<span class="d-hunk">{{ line }}</span>
+{% elif line.startswith('+') %}<span class="d-add">{{ line }}</span>
+{% elif line.startswith('-') %}<span class="d-del">{{ line }}</span>
+{% else %}<span>{{ line }}</span>
+{% endif %}{% endfor %}</pre>
+      </div>
+    {% endfor %}
+  </div>
+  <div class="commands">
+    <h3>Commands to apply</h3>
+    {% for c in res.final_changes %}
+      <div class="mono small"><strong>{{ c.device }}</strong>: {{ c.commands | map("trim") | join(" · ") }}</div>
+    {% endfor %}
+  </div>
+  <div class="explanation"><h3>Explanation</h3><p>{{ res.explanation }}</p></div>
+  <div class="approval" id="decision-{{ run.id }}">
+    <button class="btn btn-primary" hx-post="/runs/{{ run.id }}/approve"
+            hx-target="#decision-{{ run.id }}" hx-swap="outerHTML">Approve</button>
+    <button class="btn" hx-post="/runs/{{ run.id }}/reject"
+            hx-target="#decision-{{ run.id }}" hx-swap="outerHTML">Reject</button>
+  </div>
+{% endif %}

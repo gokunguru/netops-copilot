@@ -1,6 +1,7 @@
 """Agent pipeline: parse -> generate -> gate -> dry-run -> (retry) -> explain."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -19,6 +20,7 @@ from netops_copilot.models import (
     Intent,
     ProposedChange,
     RunResult,
+    Step,
     VlanParams,
 )
 
@@ -88,29 +90,47 @@ def findings_table(findings) -> str:
     )
 
 
-def run_audit(llm: LLM, result: RunResult, devices: dict[str, Device]) -> RunResult:
+OnStep = Callable[[Step], None]
+
+
+def _noop(_: Step) -> None:
+    pass
+
+
+def run_audit(llm: LLM, result: RunResult, devices: dict[str, Device],
+              on_step: OnStep = _noop) -> RunResult:
     """Read-only path: deterministic evaluation, then the model explains the findings."""
     flows = AclAuditParams(**result.intent.params).flows
     for host in result.intent.targets:
         result.findings.extend(acl.audit(devices[host], flows))
+    failed = sum(not f.compliant for f in result.findings)
+    on_step(Step(name="audit", ok=failed == 0,
+                 detail=f"{len(result.findings)} checks, {failed} non-compliant"))
     result.explanation = llm.chat([
         {"role": "system", "content": prompts.EXPLAIN_AUDIT_SYSTEM},
         {"role": "user", "content": prompts.explain_audit_user(
             result.intent.model_dump_json(), findings_table(result.findings))},
     ]).strip()
+    on_step(Step(name="explain", ok=True))
     return result
 
 
-def run(llm: LLM, request: str, devices: dict[str, Device], max_retries: int = 3) -> RunResult:
-    """Full pipeline. Never pushes anything: returns a result for human approval."""
+def run(llm: LLM, request: str, devices: dict[str, Device], max_retries: int = 3,
+        on_step: OnStep = _noop) -> RunResult:
+    """Full pipeline. Never pushes anything: returns a result for human approval.
+
+    on_step is called after every step, so a UI can show progress live.
+    """
     result = RunResult(request=request)
     try:
         result.intent = parse_intent(llm, request, devices)
     except (ValueError, ValidationError, json.JSONDecodeError, KeyError) as exc:
         result.error = f"parse step failed: {exc}"
+        on_step(Step(name="parse", ok=False, detail=str(exc)))
         return result
+    on_step(Step(name="parse", ok=True, detail=result.intent.summary))
     if result.intent.change_type == ChangeType.ACL_AUDIT:
-        return run_audit(llm, result, devices)
+        return run_audit(llm, result, devices, on_step)
 
     errors: list[str] = []
     for n in range(1, max_retries + 1):
@@ -118,18 +138,26 @@ def run(llm: LLM, request: str, devices: dict[str, Device], max_retries: int = 3
             changes = generate_changes(llm, result.intent, devices, errors)
         except (ValueError, ValidationError, json.JSONDecodeError, KeyError) as exc:
             errors = [f"invalid generation output: {exc}"]
+            on_step(Step(name="generate", ok=False, attempt=n, detail=errors[0]))
             continue
+        on_step(Step(name="generate", ok=True, attempt=n, detail="; ".join(
+            f"{c.device}: " + " | ".join(x.strip() for x in c.commands) for c in changes)))
         verdict = gate.check(result.intent, changes)
         attempt = Attempt(number=n, changes=changes, gate=verdict)
+        on_step(Step(name="gate", ok=not verdict.violations, attempt=n,
+                     detail="; ".join(verdict.violations) or "PASS"))
         if verdict.violations:
             errors = verdict.violations  # deterministic gate failed: skip dry-run
         else:
             attempt.dry_run_errors, diffs = simulator.dry_run(result.intent, changes, devices)
             errors = attempt.dry_run_errors
+            on_step(Step(name="dry_run", ok=not errors, attempt=n,
+                         detail="; ".join(errors) or "all post-checks passed"))
         result.attempts.append(attempt)
         if attempt.ok:
             result.diffs = diffs
             result.explanation = explain(llm, result.intent, diffs)
+            on_step(Step(name="explain", ok=True))
             return result
 
     result.error = f"no valid change after {max_retries} attempts"

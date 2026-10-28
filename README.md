@@ -33,7 +33,20 @@ On failure at step 3 or 4, the agent loops back to step 2 with the errors in con
 - [x] ACL compliance audit (Cisco IOS + Huawei VRP), read-only
 - [ ] QoS policy check
 
-## Demo
+## Web UI
+
+```bash
+netops-copilot-web --mock     # offline, then open http://127.0.0.1:8000
+netops-copilot-web            # live on Muse Spark (needs META_API_KEY)
+```
+
+![NetOps Copilot web UI: the retry loop catches a destructive change before approval](docs/web-ui.png)
+
+Each pipeline step streams to the browser as it completes (Server-Sent Events): parse, generate, safety gate, dry-run, retry, explain. Changes end with **Approve / Reject**; audits show a compliance table with the rule or vendor default that decided each flow. Stack: FastAPI, HTMX, Jinja2, no JavaScript build step.
+
+The same pipeline is exposed as a REST API (`POST /api/runs`, `GET /api/inventory`), documented at `/docs`, so it can be called from a ticketing or ITSM workflow.
+
+## CLI demo
 
 ```bash
 netops-copilot "Create VLAN 30 named users on site-a and site-b"          # real run on Muse Spark
@@ -101,7 +114,7 @@ Every push runs [GitHub Actions](.github/workflows/ci.yml), with no API key and 
 - **Agent**: Python 3.11+, Pydantic for every LLM output
 - **Lab**: Containerlab + FRRouting
 - **Automation**: Ansible
-- **UI**: TBD
+- **UI**: FastAPI + HTMX (Server-Sent Events), Jinja2 templates
 
 ## Quickstart
 
@@ -111,7 +124,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest                 # 22 tests, no API key needed
+pytest                 # 30 tests, no API key needed
 ```
 
 ## Built during the hackathon
