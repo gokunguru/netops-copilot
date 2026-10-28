@@ -28,7 +28,7 @@ On failure at step 3 or 4, the agent loops back to step 2 with the errors in con
 ## Use cases (hackathon scope)
 
 - [x] VLAN provisioning (Cisco IOS + Huawei VRP), end to end
-- [ ] ACL compliance audit
+- [x] ACL compliance audit (Cisco IOS + Huawei VRP), read-only
 - [ ] QoS policy check
 
 ## Demo
@@ -49,6 +49,27 @@ Attempt 1: gate PASS, dry-run FAILED -> FAILED
 Attempt 2: gate PASS, dry-run OK -> OK
   site-a (cisco_ios): vlan 30 | name USERS
 ```
+
+### ACL compliance audit
+
+```bash
+netops-copilot "Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs" --mock
+```
+
+Muse Spark only translates the policy into test flows (`telnet` → `tcp/23 deny`). The verdict comes from a deterministic first-match engine that knows each vendor's default action:
+
+```
+ACL audit: NON-COMPLIANT (4 of 9 checks failed)
+OK   site-a GigabitEthernet0/0 acl=EDGE-IN telnet (tcp/23): expected deny, actual deny <- 20 deny tcp any any eq telnet
+FAIL site-a GigabitEthernet0/0 acl=EDGE-IN smb (tcp/445): expected deny, actual permit <- 40 permit ip any any
+FAIL site-b GigabitEthernet0/0/0 acl=3000 telnet (tcp/23): expected deny, actual permit <- no rule matched: Huawei traffic-filter default permit
+FAIL core (all) acl=(none) telnet (tcp/23): expected deny, actual permit <- no inbound ACL applied on any interface
+...
+```
+
+The site-b finding is the kind that slips through manual reviews: Cisco ACLs end with an implicit deny, but a Huawei `traffic-filter` **permits** packets that match no rule. The engine also treats a rule restricted to one host as not blocking the service for everyone, and flags ACLs that are applied but never defined. Exit code is `0` when compliant and `3` when not, so the audit can run in CI.
+
+### Safety layers
 
 The safety layers are independent:
 
@@ -80,7 +101,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest                 # 11 tests, no API key needed
+pytest                 # 21 tests, no API key needed
 ```
 
 ## Built during the hackathon

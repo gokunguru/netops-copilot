@@ -1,6 +1,7 @@
 """Core data structures shared across the pipeline."""
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +26,19 @@ class Device(BaseModel):
 class VlanParams(BaseModel):
     vlan_id: int = Field(ge=1, le=4094)
     name: str = Field(min_length=1, max_length=31, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class Flow(BaseModel):
+    """A test flow (any source to any destination) and the action policy expects for it."""
+
+    label: str
+    protocol: Literal["tcp", "udp", "icmp", "ip"]
+    dst_port: int | None = Field(default=None, ge=1, le=65535)
+    expected: Literal["permit", "deny"]
+
+
+class AclAuditParams(BaseModel):
+    flows: list[Flow] = Field(min_length=1, max_length=20)
 
 
 class Intent(BaseModel):
@@ -67,13 +81,37 @@ class Attempt(BaseModel):
         return self.gate.verdict == Verdict.PASS and not self.dry_run_errors
 
 
+class Finding(BaseModel):
+    """Result of evaluating one flow against the inbound filter of one interface."""
+
+    device: str
+    interface: str
+    acl: str
+    flow: Flow
+    actual: Literal["permit", "deny"]
+    matched: str
+
+    @property
+    def compliant(self) -> bool:
+        return self.actual == self.flow.expected
+
+
 class RunResult(BaseModel):
     request: str
     intent: Intent | None = None
     attempts: list[Attempt] = Field(default_factory=list)
     diffs: dict[str, str] = Field(default_factory=dict)
+    findings: list[Finding] = Field(default_factory=list)
     explanation: str = ""
     error: str = ""
+
+    @property
+    def is_audit(self) -> bool:
+        return self.intent is not None and self.intent.change_type == ChangeType.ACL_AUDIT
+
+    @property
+    def compliant(self) -> bool:
+        return bool(self.findings) and all(f.compliant for f in self.findings)
 
     @property
     def ready_for_approval(self) -> bool:

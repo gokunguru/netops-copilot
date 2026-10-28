@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from netops_copilot.agent.pipeline import load_inventory, run
+from netops_copilot.agent.pipeline import findings_table, load_inventory, run
 from netops_copilot.models import RunResult
 
 DEFAULT_INVENTORY = Path(__file__).resolve().parents[2] / "lab" / "inventory.yml"
@@ -27,6 +27,13 @@ def render(result: RunResult) -> str:
             out.append(f"  ! {e}")
     if result.error:
         out.append(f"\nERROR: {result.error}")
+        return "\n".join(out)
+    if result.is_audit:
+        out.append(f"\nACL audit: {'COMPLIANT' if result.compliant else 'NON-COMPLIANT'} "
+                   f"({sum(not f.compliant for f in result.findings)} of "
+                   f"{len(result.findings)} checks failed)")
+        out.append(findings_table(result.findings))
+        out.append(f"\nExplanation:\n{result.explanation}")
         return "\n".join(out)
     out.append("\nValidated diff (VLAN table):")
     for host, diff in result.diffs.items():
@@ -55,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
 
     result = run(llm, args.request, load_inventory(args.inventory), max_retries=args.retries)
     print(render(result))
+    if result.is_audit and not result.error:
+        return 0 if result.compliant else 3  # read-only: nothing to approve
     if not result.ready_for_approval:
         return 1
 
