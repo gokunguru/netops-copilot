@@ -1,0 +1,16 @@
+  <table class="findings">
+    <thead><tr><th></th><th>Device</th><th>Interface</th><th>ACL</th><th>Flow</th>
+      <th>Expected</th><th>Actual</th><th>Decided by</th></tr></thead>
+    <tbody>
+    {% for f in findings %}
+      <tr class="{{ '' if f.compliant else 'row-fail' }}">
+        <td><span class="pill {{ 'pill-ok' if f.compliant else 'pill-fail' }}">{{ 'OK' if f.compliant else 'FAIL' }}</span></td>
+        <td class="mono">{{ f.device }}</td><td class="mono">{{ f.interface }}</td>
+        <td class="mono">{{ f.acl }}</td>
+        <td class="mono">{{ f.flow.label }} <span class="muted">{{ f.flow.protocol }}/{{ f.flow.dst_port or 'any' }}</span></td>
+        <td>{{ f.flow.expected }}</td><td>{{ f.actual }}</td>
+        <td class="mono small">{{ f.matched }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>

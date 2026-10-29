@@ -2,7 +2,7 @@
 
 import re
 
-from netops_copilot.models import GateResult, Intent, ProposedChange, Verdict
+from netops_copilot.models import ChangeType, GateResult, Intent, ProposedChange, Verdict
 
 # Commands that must never come out of the agent, whatever the request.
 FORBIDDEN_PATTERNS = [
@@ -10,6 +10,13 @@ FORBIDDEN_PATTERNS = [
     r"^\s*(reload|reboot|erase|format|write\s+erase|reset\s+saved-configuration)\b",
     r"^\s*(no|undo)\s+(username|aaa|local-user)\b",
     r"^\s*shutdown\s*$",
+]
+
+# An ACL remediation may only add rules or bind an ACL: removing protection is never automatic.
+REMEDIATION_FORBIDDEN = [
+    r"^\s*no\s+\d+\s*$",
+    r"^\s*undo\s+rule\b",
+    r"^\s*(no|undo)\s+(ip\s+access-group|traffic-filter|ip\s+access-list|acl)\b",
 ]
 
 MAX_COMMANDS_PER_DEVICE = 50
@@ -27,6 +34,10 @@ def check(intent: Intent, changes: list[ProposedChange]) -> GateResult:
     if out_of_scope:
         violations.append(f"devices outside requested scope: {sorted(out_of_scope)}")
 
+    forbidden = FORBIDDEN_PATTERNS
+    if intent.change_type == ChangeType.ACL_REMEDIATE:
+        forbidden = FORBIDDEN_PATTERNS + REMEDIATION_FORBIDDEN
+
     for change in changes:
         # 2. Size limit.
         if len(change.commands) > MAX_COMMANDS_PER_DEVICE:
@@ -35,7 +46,7 @@ def check(intent: Intent, changes: list[ProposedChange]) -> GateResult:
             )
         # 3. Forbidden commands.
         for cmd in change.commands:
-            for pattern in FORBIDDEN_PATTERNS:
+            for pattern in forbidden:
                 if re.search(pattern, cmd, re.IGNORECASE):
                     violations.append(f"{change.device}: forbidden command '{cmd.strip()}'")
                     break

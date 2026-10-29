@@ -31,6 +31,7 @@ On failure at step 3 or 4, the agent loops back to step 2 with the errors in con
 
 - [x] VLAN provisioning (Cisco IOS + Huawei VRP), end to end
 - [x] ACL compliance audit (Cisco IOS + Huawei VRP), read-only
+- [x] ACL auto-remediation: audit, fix, re-audit the candidate config, approve
 - [ ] QoS policy check
 
 ## Web UI
@@ -84,6 +85,31 @@ FAIL core (all) acl=(none) telnet (tcp/23): expected deny, actual permit <- no i
 
 The site-b finding is the kind that slips through manual reviews: Cisco ACLs end with an implicit deny, but a Huawei `traffic-filter` **permits** packets that match no rule. The engine also treats a rule restricted to one host as not blocking the service for everyone, and flags ACLs that are applied but never defined. Exit code is `0` when compliant and `3` when not, so the audit can run in CI.
 
+### ACL auto-remediation
+
+```bash
+netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --mock-faulty
+```
+
+The agent audits, then generates a fix **only for the non-compliant devices**. A fix is accepted only if the dry-run proves it on the candidate config:
+
+1. **Re-audit**: every policy flow must now be compliant, on every interface.
+2. **Collateral check**: common services outside the policy (SSH, DNS, NTP, SNMP, BGP, RDP, ping…) must behave exactly as before.
+3. **Add-only**: the gate rejects any removal of a rule, an ACL or a binding during a remediation.
+
+With `--mock-faulty`, the model makes the classic mistake: it creates a new Cisco ACL for `core` without the final `permit ip any any`. The implicit deny would have cut the uplink. The dry-run catches it and the second attempt is clean:
+
+```
+Attempt 1: gate PASS, dry-run FAILED -> FAILED
+  ! core: still non-compliant after fix, https on GigabitEthernet0/0 is deny <- implicit deny (end of Cisco ACL)
+  ! core: collateral change on GigabitEthernet0/0, ssh, dns, http, ntp, snmp, bgp, rdp, ping permit -> deny (not requested by the policy)
+
+Attempt 2: gate PASS, dry-run OK -> OK
+  core (cisco_ios): ip access-list extended NETOPS-EDGE-IN | 10 deny tcp any any eq 23 | 20 deny tcp any any eq 445 | 1000 permit ip any any | interface GigabitEthernet0/0 | ip access-group NETOPS-EDGE-IN in
+```
+
+New rules are inserted **before** the rule that let the traffic through (first-match), using each vendor's syntax. Commands that do not parse, or that target an interface that does not exist, are rejected by the config editor before any check runs.
+
 ### Safety layers
 
 The safety layers are independent:
@@ -91,8 +117,9 @@ The safety layers are independent:
 | Layer | Catches | LLM involved |
 |---|---|---|
 | Intent validation | unknown devices, invalid VLAN id or name | no |
-| Safety gate | out-of-scope devices, forbidden commands (`reload`, `no router`, `undo local-user`…), VLAN 1 and reserved ranges | no |
+| Safety gate | out-of-scope devices, forbidden commands (`reload`, `no router`, `undo local-user`…), VLAN 1 and reserved ranges, any removal during an ACL fix | no |
 | Dry-run post-checks | wrong-vendor syntax, missing VLAN, existing VLAN removed or renamed, collateral VLANs | no |
+| ACL fix proof | policy still violated after the fix, collateral change on services outside the policy, invalid ACL syntax | no |
 | Human approval | everything else | no |
 
 ## Current status
@@ -106,7 +133,7 @@ Every push runs [GitHub Actions](.github/workflows/ci.yml), with no API key and 
 
 - **lint**: `ruff`
 - **test**: the full test suite on Python 3.11, 3.12 and 3.13
-- **demo**: the three CLI demos end to end on the offline model, asserting the retry loop catches the destructive change and the ACL audit exits with code `3` on the non-compliant lab
+- **demo**: the three CLI demos end to end on the offline model, asserting the retry loop catches the destructive change, the ACL audit exits with code `3` on the non-compliant lab, and the ACL fix catches the lockout before proposing a clean change
 
 ## Stack
 
@@ -124,7 +151,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest                 # 30 tests, no API key needed
+pytest                 # 44 tests, no API key needed
 ```
 
 ## Built during the hackathon

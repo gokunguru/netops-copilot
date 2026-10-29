@@ -36,6 +36,9 @@ EXAMPLES = [
     {"label": "ACL audit",
      "request": "Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs",
      "faulty": False},
+    {"label": "ACL auto-fix",
+     "request": "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed",
+     "faulty": True},
 ]
 
 

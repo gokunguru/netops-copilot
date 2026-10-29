@@ -35,7 +35,10 @@ def render(result: RunResult) -> str:
         out.append(findings_table(result.findings))
         out.append(f"\nExplanation:\n{result.explanation}")
         return "\n".join(out)
-    out.append("\nValidated diff (VLAN table):")
+    if result.findings:
+        out.append(f"\nAudit before fix: {sum(not f.compliant for f in result.findings)} of "
+                   f"{len(result.findings)} checks failed")
+    out.append("\nValidated diff:")
     for host, diff in result.diffs.items():
         out.append(f"[{host}]\n{diff}")
     out.append(f"\nExplanation:\n{result.explanation}")

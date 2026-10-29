@@ -66,3 +66,9 @@ jobs:
           netops-copilot "Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs" --mock || code=$?
           echo "exit code: $code"
           test "$code" -eq 3
+
+      - name: ACL auto-fix catches the lockout, then proposes a clean fix
+        run: |
+          netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --mock-faulty --yes | tee fix.txt
+          grep -q "collateral change on GigabitEthernet0/0" fix.txt
+          grep -q "Attempt 2: gate PASS, dry-run OK" fix.txt

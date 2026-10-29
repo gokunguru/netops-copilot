@@ -126,3 +126,6 @@ form .btn { margin-top: 10px; width: 100%; }
 .callout p { margin: 6px 0 0; }
 .findings td:not(:last-child) { white-space: nowrap; }
 @media (max-width: 900px) { .side { position: static; } }
+.before { margin-bottom: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.before summary { cursor: pointer; color: var(--fail); font-weight: 600; }
+.before[open] summary { margin-bottom: 8px; }

@@ -11,6 +11,8 @@ Supported change_type values:
                       "dst_port": <int or null>, "expected": "permit"|"deny"}, ...]}
   Translate each service the policy mentions into one flow with its well-known port
   (e.g. telnet = tcp/23, SMB = tcp/445, RDP = tcp/3389, SNMP = udp/161).
+- "acl_remediate": fix inbound ACLs so they comply with a security policy (proposes a change).
+  params: same as acl_audit. Use it when the request asks to fix, enforce or remediate.
 If the request names no device, target every device in the inventory.
 
 Reply with ONLY a JSON object:
@@ -24,6 +26,27 @@ Output configuration-mode commands only: no "configure terminal", "system-view",
 Vendor syntax reminders:
 - cisco_ios: "vlan <id>" then " name <NAME>"
 - huawei_vrp: "vlan <id>" then " name <NAME>" (use "undo", never "no")
+
+Reply with ONLY a JSON object: {"commands": ["...", "..."]}"""
+
+GENERATE_ACL_FIX_SYSTEM = """You are a senior network security engineer fixing inbound ACLs on
+ONE device so that every flow in the policy gets its expected action. You receive the policy,
+the current configuration and the audit violations (with the rule or default that decided).
+
+Rules:
+- Only ADD rules or bind an ACL to an interface. Never delete rules, ACLs or bindings.
+- Rules are first-match: place each new rule BEFORE the rule that currently decides the flow
+  (use a lower sequence / rule number than that rule).
+- Cisco IOS ACLs end with an implicit deny, Huawei traffic-filter permits unmatched traffic.
+- If an interface has no inbound ACL, create one, keep all other traffic permitted
+  (Cisco: end it with "permit ip any any"), and bind it inbound on the interfaces listed.
+- Output configuration-mode commands only, no "configure terminal", "system-view", "end".
+
+Syntax:
+- cisco_ios: "ip access-list extended NAME", then " <seq> deny tcp any any eq <port>";
+  "interface X", then " ip access-group NAME in"
+- huawei_vrp: "acl number <3000-3999>", then " rule <id> deny tcp destination-port eq <port>";
+  "interface X", then " traffic-filter inbound acl <number>"
 
 Reply with ONLY a JSON object: {"commands": ["...", "..."]}"""
 
@@ -61,3 +84,13 @@ def explain_user(intent_json: str, diffs: dict[str, str]) -> str:
 
 def explain_audit_user(intent_json: str, findings_table: str) -> str:
     return f"Policy intent: {intent_json}\n\nDeterministic audit results:\n{findings_table}"
+
+
+def generate_acl_fix_user(intent_json: str, hostname: str, config: str, context_json: str,
+                          errors: list[str] | None) -> str:
+    msg = (f"Policy intent: {intent_json}\nDevice: {hostname}\nContext: {context_json}\n"
+           f"Current configuration:\n{config}")
+    if errors:
+        msg += ("\n\nYour previous attempt was rejected. Fix these problems:\n"
+                + "\n".join(f"- {e}" for e in errors))
+    return msg
