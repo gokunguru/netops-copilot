@@ -129,6 +129,32 @@ jobs:
           grep -q "collateral change on GigabitEthernet0/0" fix.txt
           grep -q "Attempt 2: gate PASS, dry-run OK" fix.txt
 
+      - name: Closed loop - fix applied, audit compliant, rollback, audit non-compliant again
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/lab
+        run: |
+          set -o pipefail
+          AUDIT="Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs"
+          netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --mock --yes | tee apply.txt
+          change_id=$(grep -oE "change [0-9a-f]{10}" apply.txt | head -1 | cut -d' ' -f2)
+          netops-copilot "$AUDIT" --mock
+          netops-copilot --rollback "$change_id"
+          code=0
+          netops-copilot "$AUDIT" --mock || code=$?
+          test "$code" -eq 3
+          netops-copilot --history
+          echo "change_id=$change_id" >> "$GITHUB_ENV"
+
+      - name: Generated Ansible playbooks pass ansible-playbook --syntax-check
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/lab
+        run: |
+          pip install ansible-core
+          ansible-galaxy collection install ansible.netcommon
+          cd "$NETOPS_STATE_DIR/changes/$change_id"
+          ansible-playbook -i inventory.yml --syntax-check playbook.yml
+          ansible-playbook -i inventory.yml --syntax-check rollback.yml
+
   container:
     name: Container build, smoke test and scan
     runs-on: ubuntu-latest

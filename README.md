@@ -2,7 +2,7 @@
 
 [![CI/CD](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml)
 
-> An AI agent that turns plain-language network change requests into validated, multi-vendor configs, with a deterministic safety gate, a lab dry-run and human approval before anything touches production.
+> An AI agent that turns plain-language network change requests into validated, multi-vendor configs. A deterministic safety gate and dry-run decide what is safe, a human approves, and every applied change ships with an Ansible playbook, a rollback proven to restore the original, and a tamper-evident journal entry.
 
 Built for the **Meta Global AI Developer Hackathon** (Indie track, theme: *Build for Your World*), Oct 26 – Nov 4, 2026.
 
@@ -13,26 +13,27 @@ In network operations, writing the automation is rarely the bottleneck. The hard
 ## How it works
 
 ```
-change request ──► [1] parse intent ──► [2] generate config ──► [3] safety gate ──► [4] lab dry-run ──► [5] explain + approve ──► push
-  (plain text)       Muse Spark          Muse Spark               deterministic        Containerlab         human in the loop
-                                              ▲                         │                    │
-                                              └──── retry with errors ◄─┴────────────────────┘
+change request ─► [1] parse ─► [2] generate ─► [3] safety gate ─► [4] dry-run ─► [5] explain ─► [6] approve ─► [7] apply
+ (plain text)    Muse Spark    Muse Spark      deterministic      deterministic   Muse Spark      human          deterministic
+                                    ▲                │                 │
+                                    └── retry with errors (bounded) ◄──┘
 ```
 
-1. **Parse**: Muse Spark turns the request and current device configs into a structured intent (JSON schema).
-2. **Generate**: vendor-specific config (Cisco IOS, Huawei VRP) and an Ansible playbook.
-3. **Safety gate**: deterministic, rule-based checks, no LLM involved. Blast radius, forbidden commands, syntax, scope vs intent. Returns `PASS` or `REJECT`.
-4. **Dry-run**: the change is applied to a Containerlab replica, with pre/post checks.
-5. **Explain + approve**: plain-language diff and risk level, then an explicit human approval.
+1. **Parse**: Muse Spark turns the request into a structured intent, validated by a schema (devices must exist, VLAN ids and names, ports and protocols).
+2. **Generate**: Muse Spark writes vendor-specific commands for each device (Cisco IOS, Huawei VRP).
+3. **Safety gate**: rule-based, no LLM. Blast radius, forbidden commands, protected VLANs, add-only during ACL fixes. `PASS` or `REJECT`.
+4. **Dry-run**: the commands are applied to an **offline model of each device's config** with each vendor's grammar, then post-checks run on the result (see the safety layers below).
+5. **Explain**: Muse Spark summarises the change and its risk, grounded in the facts the checks verified.
+6. **Approve**: nothing happens without an explicit human decision.
+7. **Apply**: the validated config becomes the new lab state, with an Ansible playbook, a verified rollback and a journal entry. Re-run the audit and you see the effect; roll back and you see it disappear.
 
-On failure at step 3 or 4, the agent loops back to step 2 with the errors in context, up to a fixed retry budget.
+When step 3 or 4 fails, the errors go back to the model and it tries again, within a fixed retry budget.
 
-## Use cases (hackathon scope)
+## Use cases
 
-- [x] VLAN provisioning (Cisco IOS + Huawei VRP), end to end
-- [x] ACL compliance audit (Cisco IOS + Huawei VRP), read-only
-- [x] ACL auto-remediation: audit, fix, re-audit the candidate config, approve
-- [ ] QoS policy check
+- **VLAN provisioning** on Cisco IOS and Huawei VRP
+- **ACL compliance audit**, read-only: the policy in plain language, a verdict per interface and flow
+- **ACL auto-remediation**: audit, fix only what is non-compliant, prove the fix, approve, apply, roll back
 
 ## Web UI
 
@@ -125,10 +126,36 @@ The safety layers are independent:
 | ACL fix proof | filtering changed on an interface the audit did not flag, policy still violated after the fix, collateral change on services outside the policy, invalid ACL syntax | no |
 | Human approval | everything else | no |
 
-## Current status
+## After "Approve"
 
-- The dry-run currently runs on an **offline config simulator** (`lab/simulator.py`) that applies commands to a model of each device's VLAN table with vendor-specific grammar. A Containerlab-backed runner is the next milestone.
-- Nothing is pushed to devices yet: the approval step is the end of the pipeline.
+```bash
+netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --mock --yes
+netops-copilot "Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs" --mock   # now COMPLIANT
+netops-copilot --history
+netops-copilot --rollback <change-id>                                                         # NON-COMPLIANT again
+netops-copilot --reset-lab
+```
+
+```
+Applied to the lab as change 30bff67275 by kamil (journal #1).
+  rollback site-a: ip access-list extended EDGE-IN | no 1
+  rollback site-b: acl number 3000 | undo rule 1
+  rollback core: interface GigabitEthernet0/0 | no ip access-group NETOPS-EDGE-IN in | no ip access-list extended NETOPS-EDGE-IN
+  Ansible: .netops/changes/30bff67275/playbook.yml  (rollback.yml, inventory.yml alongside)
+```
+
+- **What was validated is what gets applied**: the new config comes from the same editor the dry-run uses; for VLANs it is cross-checked against the simulator.
+- **No change without a proven rollback**: the inverse commands are derived from the config diff, ordered for a live device (unbind before deleting an ACL), then **replayed on the new config and required to restore the original exactly**. If that cannot be proven, the change is refused.
+- **No stale approvals**: if the lab changed between the run and the approval, the change is refused. Same for a rollback over a later change.
+- **Ansible artefacts**: `playbook.yml`, `rollback.yml` and `inventory.yml` per change, using `ansible.netcommon.cli_config` with a backup of the running config first. CI checks them with `ansible-playbook --syntax-check`. Cisco hosts use `cisco.ios`; Huawei hosts use `community.network.ce`, which is no longer bundled with Ansible (`ansible-galaxy collection install community.network`).
+- **Tamper-evident journal**: every apply and rollback is appended to `journal.jsonl`, each entry hashing the previous one. `--history` and `/api/changes` check the chain.
+
+The same actions are in the web UI (Approve, playbook / rollback / inventory downloads, Roll back, change log, Reset lab) and in the API (`GET /api/changes`).
+
+## Scope and limits
+
+- **The lab is a model, not real devices.** The dry-run and the lab state are offline models of each device's configuration (VLANs, ACLs, interface bindings), with Cisco IOS and Huawei VRP grammar. Running real Cisco or Huawei images needs vendor licences, so nothing is pushed to live devices; the generated Ansible playbooks are the hand-off to real equipment.
+- **Grammar coverage is deliberately narrow**: anything outside VLANs, extended ACLs and inbound bindings is rejected rather than guessed.
 
 ## CI/CD
 
@@ -146,7 +173,7 @@ Every push and pull request runs [the pipeline](.github/workflows/ci.yml), with 
 | **Lint** | `ruff` on the code, `actionlint` + `shellcheck` on the workflows themselves |
 | **Tests** | the suite on Python 3.11, 3.12 and 3.13, **fails under 88 % branch coverage**; coverage and JUnit reports kept as artifacts |
 | **Security** | `gitleaks` on the full git history (no API key ever committed), `bandit` static analysis, `pip-audit` on dependencies |
-| **Demos** | the four CLI demos end to end on the offline model, asserting the retry loop and the lockout catch actually happen |
+| **Demos** | the CLI demos end to end on the offline model, asserting the retry loop and the lockout catch happen, then the closed loop: fix applied, audit compliant, rollback, audit non-compliant again; the generated playbooks pass `ansible-playbook --syntax-check` |
 | **Container** | builds the image, runs it, probes `/healthz`, the UI and the REST API, checks it runs as a non-root user, then fails on any fixable HIGH or CRITICAL CVE (Trivy) |
 | **Publish** | on `main` only, after everything above is green: pushes `ghcr.io/gokunguru/netops-copilot` tagged `latest` and with the commit SHA, with an SBOM and build provenance |
 
@@ -161,15 +188,15 @@ docker run --rm -p 8000:8000 ghcr.io/gokunguru/netops-copilot                   
 docker run --rm -p 8000:8000 -e NETOPS_MOCK=0 -e META_API_KEY=... ghcr.io/gokunguru/netops-copilot   # Muse Spark
 ```
 
-The image is a multi-stage build on `python:3.12-slim`, runs as an unprivileged user and ships a health check.
+The image is a multi-stage build on `python:3.12-slim`, runs as an unprivileged user and ships a health check. The lab state lives in the container (`/home/netops/.netops`): mount a volume there to keep it.
 
 ## Stack
 
-- **Models**: Muse Spark (`muse-spark-1.3`) via Meta Model API, OpenAI-compatible endpoint (Muse Spark Open via partner inference, if available)
+- **Models**: Muse Spark (`muse-spark-1.3`) via Meta Model API, OpenAI-compatible endpoint; any OpenAI-compatible endpoint serving Muse Spark Open works by changing `.env`
 - **Agent**: Python 3.11+, Pydantic for every LLM output
-- **Lab**: Containerlab + FRRouting
-- **Automation**: Ansible
-- **UI**: FastAPI + HTMX (Server-Sent Events), Jinja2 templates
+- **Lab**: offline config models with Cisco IOS and Huawei VRP grammar
+- **Hand-off**: Ansible (`ansible.netcommon.cli_config`)
+- **UI and API**: FastAPI + HTMX (Server-Sent Events), Jinja2 templates
 
 ## Quickstart
 
@@ -179,7 +206,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest                 # 65 tests, no API key needed
+pytest                 # 82 tests, no API key needed
 ```
 
 ## Built during the hackathon

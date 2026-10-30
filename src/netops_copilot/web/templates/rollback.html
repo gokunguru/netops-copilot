@@ -1,0 +1,6 @@
+{% if ok %}
+  <div class="callout callout-ok small"><strong>Rolled back</strong> on {{ entry.devices | join(", ") }}
+    · journal #{{ entry.seq }}. The lab is back to its previous configs.</div>
+{% else %}
+  <div class="callout callout-fail small"><strong>Rollback refused.</strong> {{ message }}</div>
+{% endif %}

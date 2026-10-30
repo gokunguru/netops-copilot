@@ -14,7 +14,6 @@ class Vendor(str, Enum):
 class ChangeType(str, Enum):
     VLAN_PROVISION = "vlan_provision"
     ACL_AUDIT = "acl_audit"
-    QOS_CHECK = "qos_check"
     ACL_REMEDIATE = "acl_remediate"
 
 

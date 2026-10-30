@@ -25,12 +25,13 @@ from netops_copilot.models import (
 )
 
 
-def load_inventory(path: str | Path) -> dict[str, Device]:
+def load_inventory(path: str | Path, store=None) -> dict[str, Device]:
+    """Devices from the inventory; configs changed by approved runs come from the lab state."""
     path = Path(path)
     data = yaml.safe_load(path.read_text())
     return {
         host: Device(hostname=host, vendor=d["vendor"],
-                     config=(path.parent / d["config"]).read_text())
+                     config=(store and store.config(host)) or (path.parent / d["config"]).read_text())
         for host, d in data["devices"].items()
     }
 

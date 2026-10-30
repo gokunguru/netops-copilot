@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 
+from netops_copilot import changes
 from netops_copilot.agent.pipeline import findings_table, load_inventory, run
 from netops_copilot.models import RunResult
 
@@ -46,16 +47,51 @@ def render(result: RunResult) -> str:
     return "\n".join(out)
 
 
+def print_history(store) -> int:
+    entries = store.journal()
+    if not entries:
+        print("No change applied to the lab yet.")
+        return 0
+    for e in entries:
+        print(f"#{e['seq']:<3} {e['time']}  {e['type']:<8} {e['change']}  by {e['operator']:<12} "
+              f"{', '.join(e['devices'])}  \"{e['request']}\"")
+    print(f"\nJournal integrity (hash chain): {'OK' if store.verify_journal() else 'BROKEN'}")
+    return 0 if store.verify_journal() else 5
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="netops-copilot", description=__doc__)
-    p.add_argument("request", help="plain-language change request")
+    p.add_argument("request", nargs="?", help="plain-language change request")
     p.add_argument("--inventory", default=str(DEFAULT_INVENTORY))
     p.add_argument("--mock", action="store_true", help="offline deterministic model, no API call")
     p.add_argument("--mock-faulty", action="store_true",
                    help="mock model that first proposes a destructive change (demo of the retry loop)")
     p.add_argument("--retries", type=int, default=int(os.getenv("MAX_RETRIES", "3")))
     p.add_argument("--yes", action="store_true", help="approve without prompting (lab only)")
+    p.add_argument("--history", action="store_true", help="show the change journal")
+    p.add_argument("--rollback", metavar="CHANGE_ID", help="roll back an applied change")
+    p.add_argument("--reset-lab", action="store_true",
+                   help="discard every applied change and the journal (demo reset)")
     args = p.parse_args(argv)
+    store = changes.Store()
+
+    if args.history:
+        return print_history(store)
+    if args.reset_lab:
+        store.reset()
+        print(f"Lab reset: configs back to the inventory, journal cleared ({store.root}).")
+        return 0
+    if args.rollback:
+        try:
+            entry = changes.rollback(args.rollback, args.inventory, store)
+        except changes.ChangeError as exc:
+            print(f"Rollback refused: {exc}")
+            return 4
+        print(f"Rolled back {entry['change']} on {', '.join(entry['devices'])} "
+              f"(journal #{entry['seq']}).")
+        return 0
+    if not args.request:
+        p.error("a change request is required (or --history, --rollback, --reset-lab)")
 
     if args.mock or args.mock_faulty:
         from netops_copilot.llm.mock import MockLLM
@@ -64,7 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         from netops_copilot.llm.client import MetaClient
         llm = MetaClient()
 
-    result = run(llm, args.request, load_inventory(args.inventory), max_retries=args.retries)
+    devices = load_inventory(args.inventory, store)
+    result = run(llm, args.request, devices, max_retries=args.retries)
     print(render(result))
     if result.is_audit and not result.error:
         return 0 if result.compliant else 3  # read-only: nothing to approve
@@ -73,10 +110,21 @@ def main(argv: list[str] | None = None) -> int:
 
     approved = args.yes or input("\nApprove this change? [y/N] ").strip().lower() == "y"
     if not approved:
-        print("Rejected by operator. Nothing was pushed.")
+        print("Rejected by operator. Nothing was applied.")
         return 2
-    # Push to devices is intentionally not implemented yet: next step is the Containerlab runner.
-    print("Approved. (Push not implemented yet: lab runner is the next milestone.)")
+    try:
+        entry = changes.commit(result, devices, args.inventory, store)
+    except changes.ChangeError as exc:
+        print(f"Not applied: {exc}")
+        return 4
+    folder = store.changes / entry["change"]
+    record = store.record(entry["change"])
+    print(f"\nApplied to the lab as change {entry['change']} by {entry['operator']} "
+          f"(journal #{entry['seq']}).")
+    for host, info in record["devices"].items():
+        print(f"  rollback {host}: " + " | ".join(c.strip() for c in info["rollback"]))
+    print(f"  Ansible: {folder / 'playbook.yml'}  (rollback.yml, inventory.yml alongside)")
+    print(f"  Undo:    netops-copilot --rollback {entry['change']}")
     return 0
 
 

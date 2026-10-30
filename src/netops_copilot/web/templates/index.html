@@ -53,12 +53,32 @@
         </ul>
       </section>
 
+      <section class="panel">
+        <h2>Change log</h2>
+        {% if journal %}
+          <ul class="journal">
+            {% for e in journal %}
+              <li><span class="pill {{ 'pill-ok' if e.type == 'apply' else 'pill-warn' }}">{{ e.type }}</span>
+                <span class="mono">{{ e.change }}</span>
+                <span class="muted small">{{ e.devices | join(", ") }}</span></li>
+            {% endfor %}
+          </ul>
+          <p class="small {{ '' if journal_ok else 'fail' }}">Hash chain {{ 'intact' if journal_ok else 'BROKEN' }}
+            · <a class="link" href="/api/changes">full journal</a></p>
+        {% else %}
+          <p class="muted small">No change applied yet.</p>
+        {% endif %}
+        <button class="chip" hx-post="/lab/reset" hx-target="this" hx-swap="outerHTML"
+                hx-confirm="Discard every applied change and the journal?">Reset lab</button>
+      </section>
+
       <section class="panel guarantees">
         <h2>Guarantees</h2>
         <ul>
           <li>Every model output is schema-validated</li>
           <li>Safety gate and dry-run are deterministic: no LLM decides what is safe</li>
           <li>Nothing is applied without human approval</li>
+          <li>Every change ships with a rollback proven to restore the original</li>
         </ul>
       </section>
     </aside>

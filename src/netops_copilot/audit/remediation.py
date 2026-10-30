@@ -11,7 +11,7 @@ import difflib
 import json
 
 from netops_copilot.audit import acl
-from netops_copilot.lab import acl_editor
+from netops_copilot.lab import config_editor
 from netops_copilot.models import Device, Finding, Flow, ProposedChange
 
 # Common services probed before and after the change to detect collateral damage.
@@ -30,7 +30,7 @@ def interface_actions(device: Device, flows: list[Flow]) -> dict[tuple[str, str]
     rules = acl.parse_acls(device)
     filters = acl.inbound_filters(device)
     result = {}
-    for iface in acl_editor.interfaces(device.config):
+    for iface in config_editor.interfaces(device.config):
         for flow in flows:
             name = filters.get(iface)
             if name is None or name not in rules:
@@ -43,7 +43,7 @@ def interface_actions(device: Device, flows: list[Flow]) -> dict[tuple[str, str]
 def interfaces_to_fix(device: Device, findings: list[Finding]) -> list[str]:
     flagged = {f.interface for f in findings if f.device == device.hostname and not f.compliant}
     if "(all)" in flagged:
-        return acl_editor.interfaces(device.config)
+        return config_editor.interfaces(device.config)
     return sorted(flagged)
 
 
@@ -72,8 +72,8 @@ def dry_run(flows: list[Flow], changes: list[ProposedChange], devices: dict[str,
     for change in changes:
         device = devices[change.device]
         try:
-            new_config = acl_editor.apply(change.vendor, device.config, change.commands)
-        except acl_editor.EditError as exc:
+            new_config = config_editor.apply(change.vendor, device.config, change.commands)
+        except config_editor.EditError as exc:
             errors.append(f"{change.device}: {exc}")
             continue
         candidate = device.model_copy(update={"config": new_config})

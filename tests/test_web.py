@@ -33,9 +33,9 @@ def test_vlan_run_streams_steps_then_result_and_can_be_approved():
     assert events(stream) == ["step"] * 5 + ["result", "done"]
     assert "+vlan 30" in stream and "Approve" in stream
     decision = c.post(f"/runs/{run_id}/approve")
-    assert decision.status_code == 200 and "Approved" in decision.text
+    assert decision.status_code == 200 and "Applied to the lab" in decision.text
     # a decision is final
-    assert "Approved" in c.post(f"/runs/{run_id}/reject").text
+    assert "Applied to the lab" in c.post(f"/runs/{run_id}/reject").text
 
 
 def test_retry_loop_visible_in_stream():

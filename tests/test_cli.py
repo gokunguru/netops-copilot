@@ -10,13 +10,13 @@ FIX = "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed"
 def test_vlan_approved_with_yes(capsys):
     assert cli.main([VLAN, "--mock", "--yes"]) == 0
     out = capsys.readouterr().out
-    assert "+vlan 30" in out and "Approved" in out
+    assert "+vlan 30" in out and "Applied to the lab as change" in out
 
 
 def test_operator_rejects(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda _: "n")
     assert cli.main([VLAN, "--mock"]) == 2
-    assert "Nothing was pushed" in capsys.readouterr().out
+    assert "Nothing was applied" in capsys.readouterr().out
 
 
 def test_operator_approves_interactively(monkeypatch):

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from netops_copilot import gate
 from netops_copilot.agent.pipeline import load_inventory, run
 from netops_copilot.audit import acl, remediation
-from netops_copilot.lab import acl_editor
+from netops_copilot.lab import config_editor
 from netops_copilot.llm.mock import MockLLM
 from netops_copilot.models import ChangeType, Device, Flow, Intent, ProposedChange, Vendor
 from netops_copilot.web.app import create_app
@@ -38,14 +38,14 @@ def devices():
 # ---------- editor ----------
 
 def test_editor_inserts_by_sequence_number():
-    out = acl_editor.apply(Vendor.CISCO_IOS, CISCO,
+    out = config_editor.apply(Vendor.CISCO_IOS, CISCO,
                            ["ip access-list extended EDGE-IN", " 15 deny tcp any any eq 23"])
     lines = out.splitlines()
     assert lines.index(" 15 deny tcp any any eq 23") == lines.index(" 10 permit tcp any any eq 443") + 1
 
 
 def test_editor_creates_acl_before_end_and_binds_interface():
-    out = acl_editor.apply(Vendor.CISCO_IOS, CISCO, [
+    out = config_editor.apply(Vendor.CISCO_IOS, CISCO, [
         "ip access-list extended NEW", " deny tcp any any eq 23", " permit ip any any",
         "interface Gi0/1", " ip access-group NEW in"])
     assert out.rstrip().endswith("end")
@@ -61,8 +61,8 @@ def test_editor_creates_acl_before_end_and_binds_interface():
     (["acl number 3000"], "unrecognized"),  # Huawei syntax on a Cisco device
 ])
 def test_editor_rejects_invalid_commands(commands, message):
-    with pytest.raises(acl_editor.EditError, match=message):
-        acl_editor.apply(Vendor.CISCO_IOS, CISCO, commands)
+    with pytest.raises(config_editor.EditError, match=message):
+        config_editor.apply(Vendor.CISCO_IOS, CISCO, commands)
 
 
 # ---------- dry-run ----------
@@ -108,7 +108,7 @@ def test_remediation_end_to_end_fixes_only_failing_devices_and_proves_it():
     flows = [f.flow for f in result.findings if f.device == "site-a"]
     for change in result.final_changes:
         dev = devices()[change.device]
-        fixed = dev.model_copy(update={"config": acl_editor.apply(dev.vendor, dev.config, change.commands)})
+        fixed = dev.model_copy(update={"config": config_editor.apply(dev.vendor, dev.config, change.commands)})
         assert all(f.compliant for f in acl.audit(fixed, flows))
 
 

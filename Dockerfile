@@ -15,6 +15,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NETOPS_HOST=0.0.0.0 \
     NETOPS_PORT=8000 \
     NETOPS_INVENTORY=/app/lab/inventory.yml \
+    NETOPS_STATE_DIR=/home/netops/.netops \
     NETOPS_MOCK=1
 # Offline model by default: run with -e NETOPS_MOCK=0 -e META_API_KEY=... for Muse Spark.
 

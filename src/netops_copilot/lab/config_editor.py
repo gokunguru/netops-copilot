@@ -1,11 +1,16 @@
-"""Offline ACL editor: applies configuration-mode ACL commands to a device config and returns
-the candidate config. Used by the remediation dry-run, which then re-audits the candidate.
+"""Offline config editor: applies configuration-mode commands to a device config and returns
+the new config text. Used by the ACL dry-run (re-audit of the candidate), by the apply step
+(the lab state is updated with exactly this text) and to replay and verify rollbacks.
 
 Supported grammar (anything else raises EditError, so a hallucinated command never passes):
 - Cisco IOS:  ip access-list extended NAME / [seq] permit|deny ... / no <seq>
-              interface X / ip access-group NAME in
+              no ip access-list extended NAME
+              interface X / ip access-group NAME in / no ip access-group NAME in
+              vlan N / name X / no vlan N
 - Huawei VRP: acl number N | acl name X / rule [id] permit|deny ... / undo rule <id>
-              interface X / traffic-filter inbound acl N
+              undo acl number N | undo acl name X
+              interface X / traffic-filter inbound acl N / undo traffic-filter inbound acl N
+              vlan N | vlan batch N... / name X | description X / undo vlan N
 """
 
 import re
@@ -74,14 +79,44 @@ def _delete_entry(block: Block, number: int, vendor: Vendor) -> None:
     raise EditError(f"entry {number} not found in '{block[0].strip()}'")
 
 
+def _delete_block(blocks: list[Block], header: str, vendor: Vendor) -> None:
+    sep = "!" if vendor == Vendor.CISCO_IOS else "#"
+    for i, block in enumerate(blocks):
+        if block[0].strip() == header:
+            # Drop the block and the lone separator the editor placed after it.
+            end = i + 2 if i + 1 < len(blocks) and blocks[i + 1] == [sep] else i + 1
+            del blocks[i:end]
+            return
+    raise EditError(f"'{header}' does not exist on this device")
+
+
 def apply(vendor: Vendor, config: str, commands: list[str]) -> str:
     blocks = _split(config)
-    ctx: tuple[str, Block] | None = None  # ("acl" | "interface", block)
+    ctx: tuple[str, Block] | None = None  # ("acl" | "interface" | "vlan", block)
     cisco = vendor == Vendor.CISCO_IOS
 
     for raw in commands:
         cmd = raw.strip()
         if not cmd or cmd in ("!", "#", "exit", "quit"):
+            ctx = None
+            continue
+
+        # Remove a whole ACL or VLAN (used by rollbacks; the gate forbids it in remediations).
+        removal = (re.fullmatch(r"no (ip access-list extended \S+|vlan \d+)", cmd) if cisco
+                   else re.fullmatch(r"undo (acl (?:number \d+|name \S+)|vlan \d+)", cmd))
+        if removal:
+            _delete_block(blocks, removal.group(1), vendor)
+            ctx = None
+            continue
+
+        # Enter a VLAN (created if missing). Huawei "vlan batch" creates each VLAN.
+        if m := re.fullmatch(r"vlan (\d+)", cmd):
+            block = _find(blocks, cmd) or _new_block(blocks, cmd, vendor)
+            ctx = ("vlan", block)
+            continue
+        if not cisco and (m := re.fullmatch(r"vlan batch ([\d ]+)", cmd)):
+            for vid in m.group(1).split():
+                _find(blocks, f"vlan {vid}") or _new_block(blocks, f"vlan {vid}", vendor)
             ctx = None
             continue
 
@@ -100,6 +135,16 @@ def apply(vendor: Vendor, config: str, commands: list[str]) -> str:
                 raise EditError(f"interface {m.group(1)} does not exist on this device")
             ctx = ("interface", block)
             continue
+
+        if ctx and ctx[0] == "vlan":
+            block = ctx[1]
+            naming = (re.fullmatch(r"name (\S+)", cmd) if cisco
+                      else re.fullmatch(r"(?:name|description) (\S+)", cmd))
+            if naming:
+                block[1:] = [line for line in block[1:]
+                             if not re.match(r"^\s+(?:name|description)\s", line)]
+                block.append(f" {cmd}")
+                continue
 
         if ctx and ctx[0] == "acl":
             block = ctx[1]
@@ -128,6 +173,14 @@ def apply(vendor: Vendor, config: str, commands: list[str]) -> str:
                 prefix = " ip access-group " if cisco else " traffic-filter inbound "
                 block[1:] = [line for line in block[1:] if not line.startswith(prefix)]
                 block.append(f" {cmd}")
+                continue
+            unbind = (re.fullmatch(r"no (ip access-group \S+ in)", cmd) if cisco
+                      else re.fullmatch(r"undo (traffic-filter inbound acl (?:name )?\S+)", cmd))
+            if unbind:
+                line = f" {unbind.group(1)}"
+                if line not in block:
+                    raise EditError(f"'{unbind.group(1)}' is not configured on {block[0].strip()}")
+                block.remove(line)
                 continue
 
         raise EditError(f"unrecognized or wrong-vendor command for {vendor.value}: '{cmd}'")

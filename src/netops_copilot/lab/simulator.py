@@ -1,5 +1,5 @@
 """Offline dry-run: applies generated commands to a model of each device's config
-and runs pre/post checks. Scope: VLAN objects. A Containerlab-backed runner comes next.
+and runs pre/post checks. Scope: VLAN objects.
 """
 
 import difflib

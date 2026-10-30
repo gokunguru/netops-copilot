@@ -1,7 +1,27 @@
 <div class="approval" id="decision-{{ run.id }}">
   {% if run.decision == "approved" %}
-    <div class="callout callout-ok"><strong>Approved.</strong>
-      Push to devices is not implemented yet: the lab runner is the next milestone.</div>
+    <div class="callout callout-ok">
+      <strong>Applied to the lab</strong> as change <span class="mono">{{ run.change.change }}</span>
+      by {{ run.change.operator }} · journal #{{ run.change.seq }}.
+      <p class="muted">Next runs see the new config: re-run the audit to check the result.</p>
+      <div class="rollback-plan">
+        {% for host, info in record.devices.items() %}
+          <div class="mono small"><strong>rollback {{ host }}</strong>:
+            {{ info.rollback | map("trim") | join(" · ") }}</div>
+        {% endfor %}
+        <p class="muted small">Rollback replayed offline: restores the original configs exactly.</p>
+      </div>
+      <div class="artefacts">
+        <a class="btn" href="/changes/{{ run.change.change }}/playbook.yml" target="_blank">playbook.yml</a>
+        <a class="btn" href="/changes/{{ run.change.change }}/rollback.yml" target="_blank">rollback.yml</a>
+        <a class="btn" href="/changes/{{ run.change.change }}/inventory.yml" target="_blank">inventory.yml</a>
+        <button class="btn" hx-post="/changes/{{ run.change.change }}/rollback"
+                hx-target="#rollback-{{ run.id }}" hx-swap="innerHTML">Roll back</button>
+      </div>
+      <div id="rollback-{{ run.id }}"></div>
+    </div>
+  {% elif run.decision == "failed" %}
+    <div class="callout callout-fail"><strong>Not applied.</strong> {{ run.detail }}</div>
   {% else %}
     <div class="callout"><strong>Rejected by operator.</strong> Nothing was applied.</div>
   {% endif %}

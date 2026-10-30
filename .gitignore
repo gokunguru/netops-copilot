@@ -22,3 +22,6 @@ lab/*.bak
 .vscode/
 .idea/
 .DS_Store
+
+# Lab state, applied changes and journal (local runs)
+.netops/
