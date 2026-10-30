@@ -146,7 +146,7 @@ def test_cli_apply_history_rollback_reset(capsys):
     change_id = re.search(r"Change (\w{10}) applied", capsys.readouterr().out).group(1)
     assert cli.main([AUDIT, "--mock"]) == 0  # compliant now
     assert cli.main(["--history"]) == 0
-    assert f"apply    {change_id}" in capsys.readouterr().out
+    assert f"apply     {change_id}" in capsys.readouterr().out
     assert cli.main(["--rollback", change_id]) == 0
     assert cli.main(["--rollback", change_id]) == 4
     assert cli.main([AUDIT, "--mock"]) == 3

@@ -362,20 +362,33 @@ def commit(result: RunResult, devices: dict[str, Device], inventory: str | Path,
 
 
 def rollback(change_id: str, inventory: str | Path, store: Store, who: str | None = None) -> dict:
+    """Undo a change. On a live device, three states are told apart:
+    - as left by the change: roll it back;
+    - already back to the state before the change (someone reverted it outside the tool):
+      nothing to push, the fact is recorded in the journal;
+    - anything else: refuse, and say which block moved.
+    """
     from netops_copilot.agent.pipeline import load_inventory
 
     record = store.record(change_id)
-    if any(e["type"] == "rollback" and e["change"] == change_id for e in store.journal()):
+    if any(e["type"] in ("rollback", "reconcile") and e["change"] == change_id
+           for e in store.journal()):
         raise ChangeError(f"change {change_id} was already rolled back")
     current = load_inventory(inventory, store, live=False)
-    restored, live = {}, []
+    restored, live, reverted = {}, [], []
     for host, info in record["devices"].items():
         if info.get("target") == "live":
             device = current[host]
-            running = drivers.fetch_config(device)
-            if blocks_of(running, info["headers"]) != info["blocks_after"]:
-                raise ChangeError(f"{host} changed after {change_id}: refusing to roll back over it")
-            live.append((device, info))
+            now = blocks_of(drivers.fetch_config(device), info["headers"])
+            if now == info["blocks_before"]:
+                reverted.append(host)
+            elif now == info["blocks_after"]:
+                live.append((device, info))
+            else:
+                moved = [h for h in info["headers"] if now[h] != info["blocks_after"][h]]
+                raise ChangeError(f"{host}: '{moved[0]}' was changed outside NetOps Copilot after "
+                                  f"{change_id} (neither the state it left nor the one before): "
+                                  "refusing to roll back over it")
             continue
         config = current[host].config
         if sha(config) != info["after_sha256"]:
@@ -391,7 +404,9 @@ def rollback(change_id: str, inventory: str | Path, store: Store, who: str | Non
             raise ChangeError(str(exc)) from exc
     for host, text in restored.items():
         store.write_config(host, text)
-    return store.append({"type": "rollback", "change": change_id, "operator": who or operator(),
-                         "request": record["request"],
-                         "devices": list(restored) + [d.hostname for d, _ in live],
-                         "live": sorted(d.hostname for d, _ in live)})
+    rolled_back = list(restored) + [d.hostname for d, _ in live]
+    return store.append({"type": "rollback" if rolled_back else "reconcile",
+                         "change": change_id, "operator": who or operator(),
+                         "request": record["request"], "devices": rolled_back or reverted,
+                         "live": sorted(d.hostname for d, _ in live),
+                         "already_reverted": reverted})

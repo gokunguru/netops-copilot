@@ -186,7 +186,22 @@ def test_rollback_refused_if_the_device_moved_after_the_change(inventory, store,
     result, devices = approve(inventory, store)
     entry = changes.commit(result, devices, inventory, store)
     router.config = router.config.replace(" 10 deny tcp any any eq 23", " 10 deny tcp any any eq 22")
-    with pytest.raises(changes.ChangeError, match="changed after"):
+    with pytest.raises(changes.ChangeError,
+                       match="'ip access-list extended NETOPS-EDGE-IN' was changed outside"):
+        changes.rollback(entry["change"], inventory, store)
+
+
+def test_change_reverted_outside_the_tool_is_recognised_not_refused(inventory, store, router, capsys):
+    # Seen on the shared DevNet sandbox: someone removed our ACL and binding after the push.
+    result, devices = approve(inventory, store)
+    entry = changes.commit(result, devices, inventory, store)
+    router.config, router.pushes = ROUTER, []
+    assert cli.main(["--inventory", str(inventory), "--rollback", entry["change"]]) == 0
+    out = capsys.readouterr().out
+    assert "Nothing to roll back: cat8k already back to the state before" in out
+    assert router.pushes == []  # nothing sent to the device
+    assert store.journal()[-1]["type"] == "reconcile" and store.verify_journal()
+    with pytest.raises(changes.ChangeError, match="already rolled back"):
         changes.rollback(entry["change"], inventory, store)
 
 

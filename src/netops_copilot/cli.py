@@ -53,7 +53,7 @@ def print_history(store) -> int:
         print("No change applied to the lab yet.")
         return 0
     for e in entries:
-        print(f"#{e['seq']:<3} {e['time']}  {e['type']:<8} {e['change']}  by {e['operator']:<12} "
+        print(f"#{e['seq']:<3} {e['time']}  {e['type']:<9} {e['change']}  by {e['operator']:<12} "
               f"{', '.join(e['devices'])}  \"{e['request']}\"")
     print(f"\nJournal integrity (hash chain): {'OK' if store.verify_journal() else 'BROKEN'}")
     return 0 if store.verify_journal() else 5
@@ -110,8 +110,15 @@ def main(argv: list[str] | None = None) -> int:
         except changes.ChangeError as exc:
             print(f"Rollback refused: {exc}")
             return 4
+        if entry["type"] == "reconcile":
+            print(f"Nothing to roll back: {', '.join(entry['already_reverted'])} already back to "
+                  f"the state before {entry['change']} (changed outside NetOps Copilot). "
+                  f"Recorded in the journal (#{entry['seq']}).")
+            return 0
         print(f"Rolled back {entry['change']} on {', '.join(entry['devices'])} "
               f"(journal #{entry['seq']}).")
+        if entry["already_reverted"]:
+            print(f"  Already reverted outside the tool: {', '.join(entry['already_reverted'])}.")
         return 0
     if not args.request:
         p.error("a change request is required (or --history, --rollback, --reset-lab)")

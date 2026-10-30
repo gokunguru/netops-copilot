@@ -1,6 +1,9 @@
-{% if ok %}
+{% if ok and entry.type == "reconcile" %}
+  <div class="callout small"><strong>Nothing to roll back.</strong> {{ entry.already_reverted | join(", ") }}
+    already back to the state before this change (changed outside NetOps Copilot) · journal #{{ entry.seq }}.</div>
+{% elif ok %}
   <div class="callout callout-ok small"><strong>Rolled back</strong> on {{ entry.devices | join(", ") }}
-    · journal #{{ entry.seq }}. The lab is back to its previous configs.</div>
+    · journal #{{ entry.seq }}. Back to the previous configs.</div>
 {% else %}
   <div class="callout callout-fail small"><strong>Rollback refused.</strong> {{ message }}</div>
 {% endif %}
