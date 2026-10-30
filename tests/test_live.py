@@ -23,7 +23,9 @@ interface GigabitEthernet1
 !
 interface GigabitEthernet2
  description EDGE
- ip address 192.0.2.1 255.255.255.0
+ no ip address
+ shutdown
+ negotiation auto
 !
 interface Loopback0
  ip address 198.51.100.1 255.255.255.255
@@ -34,13 +36,15 @@ NAMES = {"23": "telnet", "80": "www"}  # IOS shows these ports by name in the ru
 
 
 class FakeRouter:
-    def __init__(self, config: str = ROUTER, reject: str | None = None, tamper: bool = False):
+    def __init__(self, config: str = ROUTER, reject: tuple[str, ...] = (), tamper: bool = False):
         self.config, self.reject, self.tamper = config, reject, tamper
         self.pushes: list[list[str]] = []
-        self.connected = False
+        self.sessions = 0
 
     def running(self) -> str:
         shown = re.sub(r"eq (\d+)\b", lambda m: f"eq {NAMES.get(m.group(1), m.group(1))}", self.config)
+        # Like real IOS (seen on the DevNet Catalyst 8000): the binding is shown before 'shutdown'.
+        shown = re.sub(r"(\n shutdown(?:\n [^\n]*)*?)(\n ip access-group [^\n]+)", r"\2\1", shown)
         return ("Building configuration...\n\nCurrent configuration : 1873 bytes\n!\n"
                 "! Last configuration change at 15:02:11 UTC Fri Oct 30 2026 by admin\n!\n" + shown)
 
@@ -48,7 +52,7 @@ class FakeRouter:
 class FakeConn:
     def __init__(self, router: FakeRouter):
         self.router = router
-        router.connected = True
+        router.sessions += 1
 
     def send_command(self, command_string, **kwargs):
         if command_string == "show running-config":
@@ -62,7 +66,7 @@ class FakeConn:
         self.router.pushes.append(list(config_commands))
         original = self.router.config
         for i, cmd in enumerate(config_commands):  # command by command, like the device
-            if self.router.reject and self.router.reject in cmd:
+            if any(r in cmd for r in self.router.reject):
                 raise RuntimeError(f"Invalid input detected at '^' marker: {cmd}")
             self.router.config = config_editor.apply(Vendor.CISCO_IOS, original,
                                                       config_commands[: i + 1])
@@ -147,7 +151,7 @@ def test_fix_pushed_verified_then_rolled_back_on_the_device(inventory, store, ro
 
 def test_device_rejecting_a_command_is_rolled_back_automatically(inventory, store, router):
     result, devices = approve(inventory, store)
-    router.reject = "ip access-group"  # ACL created, binding rejected: half-applied
+    router.reject = ("ip access-group",)  # ACL created, binding rejected: half-applied
     with pytest.raises(changes.ChangeError, match="device rejected.*Rolled back automatically"):
         changes.commit(result, devices, inventory, store)
     assert router.config.strip() == ROUTER.strip()  # the orphan ACL was removed too
@@ -232,3 +236,27 @@ def test_unreachable_device_is_reported_not_crashed(inventory, monkeypatch, caps
     assert c.get("/").status_code == 200  # the home page never opens an SSH session
     assert "Cannot read the devices" in c.post("/runs", data={"request": AUDIT}).text
     assert c.get("/api/inventory").json() == [{"hostname": "cat8k", "vendor": "cisco_ios", "live": True}]
+
+
+def test_ios_reordering_of_interface_lines_still_verifies(inventory, store, router):
+    result, devices = approve(inventory, store)
+    changes.commit(result, devices, inventory, store)
+    shown = router.running()
+    assert shown.index(" ip access-group NETOPS-EDGE-IN in") < shown.index(" shutdown")
+
+
+def test_one_ssh_session_per_device_for_the_whole_apply(inventory, store, router):
+    result, devices = approve(inventory, store)
+    router.sessions = 0
+    changes.commit(result, devices, inventory, store)
+    assert router.sessions == 1  # read, push and read-back over the same session
+
+
+def test_failed_automatic_rollback_says_why(inventory, store, router):
+    result, devices = approve(inventory, store)
+    router.reject = ("ip access-group", "no ip access-list")  # push and recovery both fail
+    with pytest.raises(changes.ChangeError) as err:
+        changes.commit(result, devices, inventory, store)
+    message = str(err.value)
+    assert "AUTOMATIC ROLLBACK FAILED, check manually: cat8k" in message
+    assert "Invalid input detected" in message and "no ip access-list" in message

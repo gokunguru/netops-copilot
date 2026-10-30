@@ -244,8 +244,10 @@ def touched_headers(before: str, after: str) -> list[str]:
 
 
 def blocks_of(config: str, headers: list[str]) -> dict[str, list[str] | None]:
+    """Touched blocks in comparable form. Order-insensitive: IOS re-orders interface lines
+    (it puts 'ip access-group' before 'shutdown'); ACL order is kept by sequence numbers."""
     blocks = _blocks(config)
-    return {h: ([_canon(c) for c in blocks[h]] if h in blocks else None) for h in headers}
+    return {h: (sorted(_canon(c) for c in blocks[h]) if h in blocks else None) for h in headers}
 
 
 def only(config: str, headers: list[str]) -> str:
@@ -254,14 +256,27 @@ def only(config: str, headers: list[str]) -> str:
     return "".join(f"{h}\n" + "".join(f"{c}\n" for c in blocks[h]) for h in headers if h in blocks)
 
 
-def _push_and_verify(device: Device, commands: list[str], expected: dict) -> str:
+def _push_and_verify(session: "drivers.Session", commands: list[str], expected: dict) -> str:
     """Push, read the running config back, compare the touched blocks to what was validated."""
-    drivers.push(device, commands)
-    running = drivers.fetch_config(device)
-    if blocks_of(running, list(expected)) != expected:
-        raise ChangeError(f"{device.hostname}: running config differs from the validated "
-                          "candidate after the push")
+    session.push(commands)
+    running = session.fetch()
+    got = blocks_of(running, list(expected))
+    if got != expected:
+        diff = next(h for h in expected if got[h] != expected[h])
+        raise ChangeError(f"{session.device.hostname}: running config differs from the validated "
+                          f"candidate after the push (block '{diff}')")
     return running
+
+
+def _restore(p: "DeviceChange", device: Device, headers: list[str], expected_before: dict) -> None:
+    """Put the touched blocks back as they were, from what is really on the device."""
+    with drivers.Session(device) as s:
+        running = s.fetch()
+        if blocks_of(running, headers) == expected_before:
+            return
+        # The push may have stopped half-way: invert what is really there, touched blocks only.
+        inverse = derive_rollback(p.vendor, only(p.before, headers), only(running, headers))
+        _push_and_verify(s, inverse, expected_before)
 
 
 def _apply_live(prepared: list["DeviceChange"], devices: dict[str, Device],
@@ -274,34 +289,28 @@ def _apply_live(prepared: list["DeviceChange"], devices: dict[str, Device],
             device = devices[p.device]
             headers = touched_headers(p.before, p.after)
             expected_before, expected_after = blocks_of(p.before, headers), blocks_of(p.after, headers)
-            running = drivers.fetch_config(device)
-            (folder / f"{p.device}.before.cfg").write_text(running)
-            if blocks_of(running, headers) != expected_before:
-                raise ChangeError(f"{p.device} changed on the device since this run was "
-                                  "validated: run it again")
-            done.append((p, headers, expected_before))
-            after = _push_and_verify(device, p.commands, expected_after)
+            with drivers.Session(device) as s:
+                running = s.fetch()
+                (folder / f"{p.device}.before.cfg").write_text(running)
+                if blocks_of(running, headers) != expected_before:
+                    raise ChangeError(f"{p.device} changed on the device since this run was "
+                                      "validated: run it again")
+                done.append((p, headers, expected_before))
+                after = _push_and_verify(s, p.commands, expected_after)
             (folder / f"{p.device}.after.cfg").write_text(after)
             evidence[p.device] = {"headers": headers, "blocks_before": expected_before,
                                   "blocks_after": expected_after}
     except (ChangeError, drivers.DriverError) as exc:
-        restored = []
+        restored, failed = [], []
         for p, headers, expected_before in reversed(done):
-            device = devices[p.device]
             try:
-                running = drivers.fetch_config(device)
-                if blocks_of(running, headers) != expected_before:
-                    # The push may have stopped half-way: invert what is really on the device.
-                    inverse = derive_rollback(p.vendor, only(p.before, headers),
-                                              only(running, headers))
-                    _push_and_verify(device, inverse, expected_before)
+                _restore(p, devices[p.device], headers, expected_before)
                 restored.append(p.device)
-            except (ChangeError, drivers.DriverError):
-                continue
-        failed = [p.device for p, _, _ in done if p.device not in restored]
-        note = (f" Rolled back automatically on: {', '.join(restored)}." if restored else "")
+            except (ChangeError, drivers.DriverError) as rb_exc:
+                failed.append(f"{p.device} ({rb_exc})")
+        note = f" Rolled back automatically on: {', '.join(restored)}." if restored else ""
         if failed:
-            note += f" MANUAL CHECK NEEDED on: {', '.join(failed)}."
+            note += f" AUTOMATIC ROLLBACK FAILED, check manually: {'; '.join(failed)}."
         raise ChangeError(f"{exc}.{note}") from exc
     return evidence
 
@@ -376,7 +385,8 @@ def rollback(change_id: str, inventory: str | Path, store: Store, who: str | Non
             raise ChangeError(f"{host}: rollback did not restore the original")
     for device, info in live:
         try:
-            _push_and_verify(device, info["rollback"], info["blocks_before"])
+            with drivers.Session(device) as session:
+                _push_and_verify(session, info["rollback"], info["blocks_before"])
         except drivers.DriverError as exc:
             raise ChangeError(str(exc)) from exc
     for host, text in restored.items():

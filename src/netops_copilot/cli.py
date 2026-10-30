@@ -70,7 +70,7 @@ def probe(inventory: str) -> int:
         try:
             info = drivers.probe(d)
         except drivers.DriverError as exc:
-            print(f"{d.hostname}: {exc}")
+            print(exc)
             return 4
         print(f"{d.hostname} ({d.driver['host']}) {' / '.join(info['version'])}")
         print(f"  edge: {', '.join(d.edge)}   protected: {', '.join(d.protected) or '-'}")

@@ -6,7 +6,8 @@ Credentials never live in the repo: the inventory names an environment-variable 
 
 import os
 import re
-from typing import Protocol
+from contextlib import suppress
+from typing import Protocol, Self
 
 from netops_copilot.models import Device, Vendor
 
@@ -59,24 +60,53 @@ def connect(device: Device) -> Connection:
         raise DriverError(f"{device.hostname}: cannot connect ({type(exc).__name__}: {exc})") from exc
 
 
+class Session:
+    """One SSH session reused for a whole apply: shared devices rate-limit logins."""
+
+    def __init__(self, device: Device) -> None:
+        self.device = device
+        self.conn: Connection | None = None
+
+    def __enter__(self) -> Self:
+        self.conn = connect(self.device)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        # Closing a dead session must never hide the real error.
+        with suppress(Exception):
+            if self.conn:
+                self.conn.disconnect()
+
+    def fetch(self) -> str:
+        """Running config; reconnects once if the session dropped (reads are safe to retry)."""
+        for attempt in (1, 2):
+            try:
+                return clean(self.conn.send_command(SHOW_CONFIG[self.device.vendor], read_timeout=60))
+            except Exception as exc:  # any transport error
+                if attempt == 2:
+                    raise DriverError(f"{self.device.hostname}: cannot read the running config "
+                                      f"({type(exc).__name__}: {exc})") from exc
+                self.conn = connect(self.device)
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def push(self, commands: list[str]) -> str:
+        """Send configuration commands; raise if the device rejects any. Never retried."""
+        try:
+            return self.conn.send_config_set([c.strip() for c in commands], cmd_verify=True,
+                                              error_pattern=ERROR_PATTERN[self.device.vendor],
+                                              read_timeout=60)
+        except Exception as exc:  # netmiko raises ConfigInvalidException and others
+            raise DriverError(f"{self.device.hostname}: device rejected the change ({exc})") from exc
+
+
 def fetch_config(device: Device) -> str:
-    conn = connect(device)
-    try:
-        return clean(conn.send_command(SHOW_CONFIG[device.vendor], read_timeout=60))
-    finally:
-        conn.disconnect()
+    with Session(device) as s:
+        return s.fetch()
 
 
 def push(device: Device, commands: list[str]) -> str:
-    """Send configuration commands; raise if the device rejects any of them."""
-    conn = connect(device)
-    try:
-        return conn.send_config_set([c.strip() for c in commands], cmd_verify=True,
-                                    error_pattern=ERROR_PATTERN[device.vendor], read_timeout=60)
-    except Exception as exc:  # netmiko raises ConfigInvalidException and others
-        raise DriverError(f"{device.hostname}: device rejected the change ({exc})") from exc
-    finally:
-        conn.disconnect()
+    with Session(device) as s:
+        return s.push(commands)
 
 
 def probe(device: Device) -> dict:
