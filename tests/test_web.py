@@ -69,3 +69,7 @@ def test_json_api():
     body = c.post("/api/runs", json={"request": "Create VLAN 30 named users on site-a"}).json()
     assert body["ready_for_approval"] is True and body["intent"]["targets"] == ["site-a"]
     assert {d["hostname"] for d in c.get("/api/inventory").json()} == {"site-a", "site-b", "core"}
+
+
+def test_healthz():
+    assert client().get("/healthz").json() == {"status": "ok", "mock": True, "devices": 3}

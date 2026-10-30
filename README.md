@@ -1,6 +1,6 @@
 # NetOps Copilot
 
-[![CI](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml)
+[![CI/CD](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml)
 
 > An AI agent that turns plain-language network change requests into validated, multi-vendor configs, with a deterministic safety gate, a lab dry-run and human approval before anything touches production.
 
@@ -130,13 +130,38 @@ The safety layers are independent:
 - The dry-run currently runs on an **offline config simulator** (`lab/simulator.py`) that applies commands to a model of each device's VLAN table with vendor-specific grammar. A Containerlab-backed runner is the next milestone.
 - Nothing is pushed to devices yet: the approval step is the end of the pipeline.
 
-## CI
+## CI/CD
 
-Every push runs [GitHub Actions](.github/workflows/ci.yml), with no API key and no network:
+```
+push / PR ──► lint ──────┐
+              tests ×3 ──┼──► container: build ─► smoke test ─► Trivy ──► publish to GHCR (main only)
+              security ──┘                                                     ▲
+              demos ─────────────────────────────────────────────────────────┘
+```
 
-- **lint**: `ruff`
-- **test**: the full test suite on Python 3.11, 3.12 and 3.13
-- **demo**: the three CLI demos end to end on the offline model, asserting the retry loop catches the destructive change, the ACL audit exits with code `3` on the non-compliant lab, and the ACL fix catches the lockout before proposing a clean change
+Every push and pull request runs [the pipeline](.github/workflows/ci.yml), with no API key:
+
+| Job | What it enforces |
+|---|---|
+| **Lint** | `ruff` on the code, `actionlint` + `shellcheck` on the workflows themselves |
+| **Tests** | the suite on Python 3.11, 3.12 and 3.13, **fails under 88 % branch coverage**; coverage and JUnit reports kept as artifacts |
+| **Security** | `gitleaks` on the full git history (no API key ever committed), `bandit` static analysis, `pip-audit` on dependencies |
+| **Demos** | the four CLI demos end to end on the offline model, asserting the retry loop and the lockout catch actually happen |
+| **Container** | builds the image, runs it, probes `/healthz`, the UI and the REST API, checks it runs as a non-root user, then fails on any fixable HIGH or CRITICAL CVE (Trivy) |
+| **Publish** | on `main` only, after everything above is green: pushes `ghcr.io/gokunguru/netops-copilot` tagged `latest` and with the commit SHA, with an SBOM and build provenance |
+
+Supply-chain hygiene: every third-party action is pinned to a full commit SHA, the default token is read-only and only the publish job can write packages, and [Dependabot](.github/dependabot.yml) proposes weekly updates for Python packages, actions and the base image.
+
+A separate [live smoke test](.github/workflows/live-smoke.yml) runs the three use cases against the real Muse Spark API. It costs tokens, so it is manual only (`Actions > Live smoke test > Run workflow`) and needs a `META_API_KEY` repository secret.
+
+### Run it in a container
+
+```bash
+docker run --rm -p 8000:8000 ghcr.io/gokunguru/netops-copilot                     # offline model
+docker run --rm -p 8000:8000 -e NETOPS_MOCK=0 -e META_API_KEY=... ghcr.io/gokunguru/netops-copilot   # Muse Spark
+```
+
+The image is a multi-stage build on `python:3.12-slim`, runs as an unprivileged user and ships a health check.
 
 ## Stack
 
@@ -154,7 +179,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest                 # 47 tests, no API key needed
+pytest                 # 65 tests, no API key needed
 ```
 
 ## Built during the hackathon

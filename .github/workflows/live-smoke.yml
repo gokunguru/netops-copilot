@@ -1,0 +1,48 @@
+name: Live smoke test (Muse Spark)
+
+# Calls the real Meta Model API, so it costs tokens: manual trigger only, never on push.
+# Requires a repository secret named META_API_KEY (Settings > Secrets and variables > Actions).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      META_API_KEY: ${{ secrets.META_API_KEY }}
+      MAX_TOKENS: "8192"
+      MAX_RETRIES: "2"
+    steps:
+      - name: Check that the secret is set
+        run: |
+          if [ -z "$META_API_KEY" ]; then
+            echo "::error::Add a META_API_KEY repository secret to run this workflow."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+
+      - name: VLAN provisioning on Muse Spark
+        run: netops-copilot "Create VLAN 30 named users on site-a and site-b" --yes
+
+      - name: ACL audit on Muse Spark (must find the 4 known violations)
+        run: |
+          set -o pipefail
+          code=0
+          netops-copilot "Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs" | tee audit.txt || code=$?
+          test "$code" -eq 3
+          grep -q "NON-COMPLIANT (4 of 9 checks failed)" audit.txt
+
+      - name: ACL auto-fix on Muse Spark
+        run: |
+          netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --yes

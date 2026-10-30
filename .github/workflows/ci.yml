@@ -1,51 +1,105 @@
-name: CI
+name: CI/CD
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
+# Least privilege by default; jobs that need more ask for it explicitly.
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  IMAGE: ghcr.io/${{ github.repository }}
+
+# Actions are pinned to full commit SHAs (supply-chain safety); Dependabot keeps them current.
 jobs:
   lint:
+    name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
+      - name: Lint workflows (actionlint + shellcheck)
+        run: |
+          pip install actionlint-py shellcheck-py
+          actionlint
 
   test:
+    name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: pytest -v
+      # Fails under the threshold set in pyproject.toml ([tool.coverage.report] fail_under).
+      - run: pytest -v --cov --cov-report=term --cov-report=xml --junitxml=junit.xml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: |
+            coverage.xml
+            junit.xml
+          retention-days: 14
+
+  security:
+    name: Security scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history: secrets are searched in every commit
+          persist-credentials: false
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e . bandit pip-audit
+      - name: Static analysis (bandit)
+        run: bandit -r src
+      - name: Dependency vulnerabilities (pip-audit)
+        run: pip-audit --skip-editable --progress-spinner off
 
   demo:
-    # End-to-end runs of the CLI with the offline model: no API key, no network.
+    name: End-to-end demos (offline model)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
@@ -56,6 +110,7 @@ jobs:
 
       - name: Retry loop catches a destructive change
         run: |
+          set -o pipefail
           netops-copilot "Create VLAN 30 named users on site-a" --mock-faulty --yes | tee out.txt
           grep -q "existing VLAN 20 removed" out.txt
           grep -q "Attempt 2: gate PASS, dry-run OK" out.txt
@@ -69,6 +124,90 @@ jobs:
 
       - name: ACL auto-fix catches the lockout, then proposes a clean fix
         run: |
+          set -o pipefail
           netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --mock-faulty --yes | tee fix.txt
           grep -q "collateral change on GigabitEthernet0/0" fix.txt
           grep -q "Attempt 2: gate PASS, dry-run OK" fix.txt
+
+  container:
+    name: Container build, smoke test and scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint, test, security]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: netops-copilot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the running container
+        run: |
+          docker run -d --name app -p 8000:8000 netops-copilot:ci
+          for _ in $(seq 1 30); do
+            curl -sf localhost:8000/healthz && break
+            sleep 1
+          done
+          curl -sf localhost:8000/healthz | grep -q '"status":"ok"'
+          curl -sf localhost:8000/ | grep -q "NetOps Copilot"
+          curl -sf localhost:8000/api/inventory | grep -q "site-b"
+          curl -sf -X POST localhost:8000/api/runs -H 'content-type: application/json' \
+            -d '{"request": "Create VLAN 30 named users on site-a"}' | grep -q '"ready_for_approval":true'
+          test "$(docker inspect -f '{{.Config.User}}' app)" = "netops"
+
+      - name: Container logs
+        if: failure()
+        run: docker logs app
+
+      - name: Vulnerability scan (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: netops-copilot:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  publish:
+    name: Publish image to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [container, demo]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+      - name: Build and push (with SBOM and provenance)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

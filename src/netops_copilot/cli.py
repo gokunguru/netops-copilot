@@ -8,7 +8,8 @@ from pathlib import Path
 from netops_copilot.agent.pipeline import findings_table, load_inventory, run
 from netops_copilot.models import RunResult
 
-DEFAULT_INVENTORY = Path(__file__).resolve().parents[2] / "lab" / "inventory.yml"
+DEFAULT_INVENTORY = Path(os.getenv("NETOPS_INVENTORY")
+                         or Path(__file__).resolve().parents[2] / "lab" / "inventory.yml")
 
 
 def render(result: RunResult) -> str:

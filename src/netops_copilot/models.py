@@ -60,7 +60,7 @@ class ProposedChange(BaseModel):
 
 
 class Verdict(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105
     REJECT = "REJECT"
 
 

@@ -167,6 +167,11 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
             "compliant": result.compliant if result.is_audit else None,
         }
 
+    @app.get("/healthz", tags=["ops"])
+    def healthz() -> dict:
+        """Liveness probe for containers and load balancers."""
+        return {"status": "ok", "mock": mock, "devices": len(devices)}
+
     @app.get("/api/inventory", tags=["api"])
     def api_inventory() -> list[dict]:
         return [{"hostname": d.hostname, "vendor": d.vendor.value} for d in devices.values()]
@@ -177,12 +182,13 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
 def serve() -> None:
     p = argparse.ArgumentParser(prog="netops-copilot-web")
     p.add_argument("--mock", action="store_true", help="offline deterministic model, no API call")
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--host", default=os.getenv("NETOPS_HOST", "127.0.0.1"))
+    p.add_argument("--port", type=int, default=int(os.getenv("NETOPS_PORT", "8000")))
     p.add_argument("--inventory", default=str(DEFAULT_INVENTORY))
     args = p.parse_args()
     import uvicorn
-    uvicorn.run(create_app(mock=args.mock, inventory=args.inventory),
+    # --mock forces offline mode; otherwise NETOPS_MOCK=1 (e.g. set in the container) decides.
+    uvicorn.run(create_app(mock=True if args.mock else None, inventory=args.inventory),
                 host=args.host, port=args.port)
 
 
