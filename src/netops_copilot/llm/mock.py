@@ -147,7 +147,7 @@ class MockLLM:
             # Faulty model: forgets that a Cisco ACL ends with an implicit deny.
             if cisco and not (self.faulty and not retry):
                 commands.append(" 1000 permit ip any any")
-            for iface in ctx["interfaces"]:
+            for iface in ctx["interfaces_to_fix"]:
                 commands += [f"interface {iface}", f" ip access-group {name} in" if cisco
                              else f" traffic-filter inbound acl {name}"]
         return json.dumps({"commands": commands})

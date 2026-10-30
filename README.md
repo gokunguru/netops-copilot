@@ -93,9 +93,10 @@ netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allo
 
 The agent audits, then generates a fix **only for the non-compliant devices**. A fix is accepted only if the dry-run proves it on the candidate config:
 
-1. **Re-audit**: every policy flow must now be compliant, on every interface.
-2. **Collateral check**: common services outside the policy (SSH, DNS, NTP, SNMP, BGP, RDP, ping…) must behave exactly as before.
-3. **Add-only**: the gate rejects any removal of a rule, an ACL or a binding during a remediation.
+1. **Scope**: filtering may only change on the interfaces the audit flagged. A fix that also drops an ACL on an access port is rejected, even if it is otherwise correct.
+2. **Re-audit**: every policy flow must now be compliant, on every interface.
+3. **Collateral check**: common services outside the policy (SSH, DNS, NTP, SNMP, BGP, RDP, ping…) must behave exactly as before.
+4. **Add-only**: the gate rejects any removal of a rule, an ACL or a binding during a remediation.
 
 With `--mock-faulty`, the model makes the classic mistake: it creates a new Cisco ACL for `core` without the final `permit ip any any`. The implicit deny would have cut the uplink. The dry-run catches it and the second attempt is clean:
 
@@ -108,6 +109,8 @@ Attempt 2: gate PASS, dry-run OK -> OK
   core (cisco_ios): ip access-list extended NETOPS-EDGE-IN | 10 deny tcp any any eq 23 | 20 deny tcp any any eq 445 | 1000 permit ip any any | interface GigabitEthernet0/0 | ip access-group NETOPS-EDGE-IN in
 ```
 
+The explanation step receives these verified facts (including vendor defaults such as Huawei's default permit), so the model's risk summary cannot contradict the deterministic checks.
+
 New rules are inserted **before** the rule that let the traffic through (first-match), using each vendor's syntax. Commands that do not parse, or that target an interface that does not exist, are rejected by the config editor before any check runs.
 
 ### Safety layers
@@ -119,7 +122,7 @@ The safety layers are independent:
 | Intent validation | unknown devices, invalid VLAN id or name | no |
 | Safety gate | out-of-scope devices, forbidden commands (`reload`, `no router`, `undo local-user`…), VLAN 1 and reserved ranges, any removal during an ACL fix | no |
 | Dry-run post-checks | wrong-vendor syntax, missing VLAN, existing VLAN removed or renamed, collateral VLANs | no |
-| ACL fix proof | policy still violated after the fix, collateral change on services outside the policy, invalid ACL syntax | no |
+| ACL fix proof | filtering changed on an interface the audit did not flag, policy still violated after the fix, collateral change on services outside the policy, invalid ACL syntax | no |
 | Human approval | everything else | no |
 
 ## Current status
@@ -151,7 +154,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest                 # 44 tests, no API key needed
+pytest                 # 47 tests, no API key needed
 ```
 
 ## Built during the hackathon

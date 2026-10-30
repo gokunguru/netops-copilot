@@ -1,6 +1,7 @@
 """ACL remediation: context for the model, and a dry-run that proves the fix.
 
 A proposed fix is accepted only if, on the candidate config:
+0. filtering changes only on interfaces the audit flagged (no scope creep), and
 1. every policy flow is compliant on every interface (re-run of the deterministic audit), and
 2. no other common service changed behaviour on any interface (collateral check), which
    catches the classic lockout: a new ACL that forgets the final "permit ip any any".
@@ -39,11 +40,18 @@ def interface_actions(device: Device, flows: list[Flow]) -> dict[tuple[str, str]
     return result
 
 
+def interfaces_to_fix(device: Device, findings: list[Finding]) -> list[str]:
+    flagged = {f.interface for f in findings if f.device == device.hostname and not f.compliant}
+    if "(all)" in flagged:
+        return acl_editor.interfaces(device.config)
+    return sorted(flagged)
+
+
 def context(device: Device, findings: list[Finding]) -> str:
     """Deterministic facts handed to the model so it does not have to re-derive them."""
     return json.dumps({
         "vendor": device.vendor.value,
-        "interfaces": acl_editor.interfaces(device.config),
+        "interfaces_to_fix": interfaces_to_fix(device, findings),
         "inbound_filters": acl.inbound_filters(device),
         "violations": [
             {"interface": f.interface, "acl": f.acl, "flow": f.flow.label,
@@ -54,8 +62,8 @@ def context(device: Device, findings: list[Finding]) -> str:
     })
 
 
-def dry_run(flows: list[Flow], changes: list[ProposedChange],
-            devices: dict[str, Device]) -> tuple[list[str], dict[str, str]]:
+def dry_run(flows: list[Flow], changes: list[ProposedChange], devices: dict[str, Device],
+            findings: list[Finding]) -> tuple[list[str], dict[str, str]]:
     errors: list[str] = []
     diffs: dict[str, str] = {}
     policy_ports = {(f.protocol, f.dst_port) for f in flows}
@@ -69,6 +77,14 @@ def dry_run(flows: list[Flow], changes: list[ProposedChange],
             errors.append(f"{change.device}: {exc}")
             continue
         candidate = device.model_copy(update={"config": new_config})
+
+        # 0. Scope: filtering may only change on interfaces the audit flagged.
+        allowed = set(interfaces_to_fix(device, findings))
+        before_f, after_f = acl.inbound_filters(device), acl.inbound_filters(candidate)
+        for iface in sorted(set(before_f) | set(after_f)):
+            if before_f.get(iface) != after_f.get(iface) and iface not in allowed:
+                errors.append(f"{change.device}: out of scope, inbound filter changed on {iface} "
+                              f"which the audit did not flag (allowed: {', '.join(sorted(allowed))})")
 
         # 1. Re-audit the candidate config against the policy.
         for f in acl.audit(candidate, flows):
@@ -90,3 +106,18 @@ def dry_run(flows: list[Flow], changes: list[ProposedChange],
             device.config.splitlines(), new_config.splitlines(),
             "running", "candidate", n=2, lineterm=""))
     return errors, diffs
+
+
+def verified_facts(flows: list[Flow], changes: list[ProposedChange],
+                   devices: dict[str, Device]) -> str:
+    """Deterministic facts about an accepted fix, handed to the explain step."""
+    lines = ["Every policy flow was re-audited on the candidate configs: all compliant.",
+             "Collateral check passed: " + ", ".join(p.label for p in PROBES)
+             + " behave exactly as before on every interface.",
+             ("Vendor defaults: a Cisco IOS ACL ends with an implicit deny; a Huawei VRP "
+             "traffic-filter PERMITS packets that match no rule (a deny-only Huawei ACL "
+             "blocks nothing else).")]
+    for c in changes:
+        lines.append(f"{c.device} ({devices[c.device].vendor.value}): filtering changed only on "
+                     f"the interfaces flagged by the audit.")
+    return "\n".join(lines)

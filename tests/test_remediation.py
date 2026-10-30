@@ -68,10 +68,11 @@ def test_editor_rejects_invalid_commands(commands, message):
 # ---------- dry-run ----------
 
 def dry(commands):
-    dev = {"r1": Device(hostname="r1", vendor=Vendor.CISCO_IOS, config=CISCO)}
+    device = Device(hostname="r1", vendor=Vendor.CISCO_IOS, config=CISCO)
+    findings = acl.audit(device, [TELNET_DENY])  # flags Gi0/0 only
     return remediation.dry_run([TELNET_DENY],
                                [ProposedChange(device="r1", vendor=Vendor.CISCO_IOS,
-                                               commands=commands)], dev)[0]
+                                               commands=commands)], {"r1": device}, findings)[0]
 
 
 def test_dry_run_accepts_a_correct_fix():
@@ -133,3 +134,34 @@ def test_remediation_in_web_ui():
     stream = c.get(f"/runs/{run_id}/events").text
     assert "Audit before fix" in stream and "collateral change" in stream and "Approve" in stream
     assert c.post(f"/runs/{run_id}/approve").status_code == 200
+
+
+def test_dry_run_rejects_filtering_on_an_interface_the_audit_did_not_flag():
+    # Reproduces a real Muse Spark answer: correct fix on Gi0/0, plus an ACL on the access
+    # port Gi0/1 that nobody asked for. Policy and collateral checks alone would let it pass.
+    errors = dry(["ip access-list extended EDGE-IN", " 5 deny tcp any any eq 23",
+                  "ip access-list extended USER-IN", " 10 deny tcp any any eq 23",
+                  " 20 permit ip any any", "interface Gi0/1", " ip access-group USER-IN in"])
+    assert errors == [
+        ("r1: out of scope, inbound filter changed on Gi0/1 which the audit did not flag "
+        "(allowed: Gi0/0)")]
+
+
+def test_device_without_any_filter_may_be_fixed_on_every_interface():
+    bare = Device(hostname="r2", vendor=Vendor.CISCO_IOS,
+                  config="interface Gi0/0\n!\ninterface Gi0/1\n!\nend\n")
+    findings = acl.audit(bare, [TELNET_DENY])
+    assert remediation.interfaces_to_fix(bare, findings) == ["Gi0/0", "Gi0/1"]
+
+
+def test_explanation_receives_verified_vendor_facts():
+    seen = []
+
+    class Spy(MockLLM):
+        def chat(self, messages, **kw):
+            seen.append(messages[-1]["content"])
+            return super().chat(messages, **kw)
+
+    result = run(Spy(), FIX, devices())
+    assert result.ready_for_approval
+    assert "Verified facts" in seen[-1] and "PERMITS packets that match no rule" in seen[-1]

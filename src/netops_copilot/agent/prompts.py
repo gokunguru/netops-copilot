@@ -38,8 +38,10 @@ Rules:
 - Rules are first-match: place each new rule BEFORE the rule that currently decides the flow
   (use a lower sequence / rule number than that rule).
 - Cisco IOS ACLs end with an implicit deny, Huawei traffic-filter permits unmatched traffic.
-- If an interface has no inbound ACL, create one, keep all other traffic permitted
-  (Cisco: end it with "permit ip any any"), and bind it inbound on the interfaces listed.
+- Only touch the interfaces in "interfaces_to_fix". Never add or change a filter on any other
+  interface, even if it has no ACL: those were not flagged by the audit.
+- If an interface to fix has no inbound ACL, create one, keep all other traffic permitted
+  (Cisco: end it with "permit ip any any"), and bind it inbound on that interface.
 - Output configuration-mode commands only, no "configure terminal", "system-view", "end".
 
 Syntax:
@@ -52,7 +54,9 @@ Reply with ONLY a JSON object: {"commands": ["...", "..."]}"""
 
 EXPLAIN_SYSTEM = """You are a senior network engineer explaining a validated change to an
 operations engineer before approval. Be concise (max 6 lines). State what changes on which
-devices, what is NOT touched, and a risk level (low / medium / high) with one reason."""
+devices, what is NOT touched, and a risk level (low / medium / high) with one reason.
+If "Verified facts" are given, they come from deterministic checks on the candidate configs:
+rely on them and never contradict them with your own assumptions."""
 
 
 EXPLAIN_AUDIT_SYSTEM = """You are a senior network security engineer reporting an ACL
@@ -77,9 +81,12 @@ def generate_user(intent_json: str, hostname: str, vendor: str, config: str,
     return msg
 
 
-def explain_user(intent_json: str, diffs: dict[str, str]) -> str:
+def explain_user(intent_json: str, diffs: dict[str, str], facts: str = "") -> str:
     body = "\n\n".join(f"### {host}\n{diff}" for host, diff in diffs.items())
-    return f"Intent: {intent_json}\n\nValidated config diffs:\n{body}"
+    msg = f"Intent: {intent_json}\n\nValidated config diffs:\n{body}"
+    if facts:
+        msg += f"\n\nVerified facts:\n{facts}"
+    return msg
 
 
 def explain_audit_user(intent_json: str, findings_table: str) -> str:

@@ -74,10 +74,10 @@ def generate_changes(llm: LLM, intent: Intent, devices: dict[str, Device],
     return changes
 
 
-def explain(llm: LLM, intent: Intent, diffs: dict[str, str]) -> str:
+def explain(llm: LLM, intent: Intent, diffs: dict[str, str], facts: str = "") -> str:
     return llm.chat([
         {"role": "system", "content": prompts.EXPLAIN_SYSTEM},
-        {"role": "user", "content": prompts.explain_user(intent.model_dump_json(), diffs)},
+        {"role": "user", "content": prompts.explain_user(intent.model_dump_json(), diffs, facts)},
     ]).strip()
 
 
@@ -137,7 +137,8 @@ ParseErrors = (ValueError, ValidationError, json.JSONDecodeError, KeyError, Type
 
 
 def _change_loop(llm: LLM, result: RunResult, gate_intent: Intent, max_retries: int,
-                 on_step: OnStep, generate: Callable, dry_run: Callable) -> RunResult:
+                 on_step: OnStep, generate: Callable, dry_run: Callable,
+                 facts: Callable | None = None) -> RunResult:
     """generate -> deterministic gate -> deterministic dry-run, retrying with the errors."""
     errors: list[str] = []
     for n in range(1, max_retries + 1):
@@ -163,7 +164,8 @@ def _change_loop(llm: LLM, result: RunResult, gate_intent: Intent, max_retries: 
         result.attempts.append(attempt)
         if attempt.ok:
             result.diffs = diffs
-            result.explanation = explain(llm, result.intent, diffs)
+            result.explanation = explain(llm, result.intent, diffs,
+                                         facts(changes) if facts else "")
             on_step(Step(name="explain", ok=True))
             return result
 
@@ -191,7 +193,8 @@ def run_remediation(llm: LLM, result: RunResult, devices: dict[str, Device], max
         llm, result, gate_intent, max_retries, on_step,
         generate=lambda errors: generate_acl_fixes(
             llm, result.intent, devices, failing, result.findings, errors),
-        dry_run=lambda changes: remediation.dry_run(flows, changes, devices),
+        dry_run=lambda changes: remediation.dry_run(flows, changes, devices, result.findings),
+        facts=lambda changes: remediation.verified_facts(flows, changes, devices),
     )
 
 
