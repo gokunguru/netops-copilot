@@ -137,7 +137,7 @@ netops-copilot --reset-lab
 ```
 
 ```
-Applied to the lab as change 30bff67275 by kamil (journal #1).
+Change 30bff67275 applied to the lab by kamil (journal #1).
   rollback site-a: ip access-list extended EDGE-IN | no 1
   rollback site-b: acl number 3000 | undo rule 1
   rollback core: interface GigabitEthernet0/0 | no ip access-group NETOPS-EDGE-IN in | no ip access-list extended NETOPS-EDGE-IN
@@ -152,9 +152,32 @@ Applied to the lab as change 30bff67275 by kamil (journal #1).
 
 The same actions are in the web UI (Approve, playbook / rollback / inventory downloads, Roll back, change log, Reset lab) and in the API (`GET /api/changes`).
 
+## Live devices (SSH)
+
+The same pipeline drives real equipment. A device with a `driver` in the inventory is read and changed over SSH (Netmiko); the agent, the gate and the dry-run are unchanged, only the source of truth moves from the lab model to the device.
+
+```bash
+pip install -e ".[live]"
+export DEVNET_USERNAME=...  DEVNET_PASSWORD=...        # from your sandbox reservation, never committed
+netops-copilot --inventory lab/devnet.yml --probe      # version and interfaces
+netops-copilot --inventory lab/devnet.yml "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed"
+netops-copilot --inventory lab/devnet.yml --rollback <change-id>
+```
+
+[`lab/devnet.yml`](lab/devnet.yml) targets Cisco's public **Catalyst 8000 Always-On** sandbox (IOS XE).
+
+What changes on a live device:
+
+- **Explicit scope**: a live device must list its `edge` interfaces, and `protected` ones (the management interface the SSH session runs through) can never be filtered by the agent, whatever the model proposes.
+- **Drift check before the push**, scoped to the blocks the change touches: someone else editing an unrelated part of a shared device does not block you, someone editing the same ACL or interface does.
+- **Verified push**: the device must accept every command (Netmiko error patterns), then the running config is read back and the touched blocks must match the validated candidate. IOS rewrites `eq 23` as `eq telnet`, so the comparison is semantic, not textual.
+- **Automatic rollback on any failure**, all-or-nothing across devices. If the device rejected a command half-way, the inverse is computed from what is really on the device, limited to the blocks the change touched, so other people's objects are never removed.
+- **Evidence**: the running config before and after is stored with the change.
+- Changes stay in the running config (no `write memory`).
+
 ## Scope and limits
 
-- **The lab is a model, not real devices.** The dry-run and the lab state are offline models of each device's configuration (VLANs, ACLs, interface bindings), with Cisco IOS and Huawei VRP grammar. Running real Cisco or Huawei images needs vendor licences, so nothing is pushed to live devices; the generated Ansible playbooks are the hand-off to real equipment.
+- **Default lab is a model.** Without a `driver`, the dry-run and the lab state are offline models of each device's configuration (VLANs, ACLs, interface bindings) with Cisco IOS and Huawei VRP grammar; CI runs entirely on it. Live devices are supported over SSH (above); the live path is tested in CI against a fake IOS XE device that behaves like one seen through Netmiko.
 - **Grammar coverage is deliberately narrow**: anything outside VLANs, extended ACLs and inbound bindings is rejected rather than guessed.
 
 ## CI/CD
@@ -206,7 +229,7 @@ cd netops-copilot
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your Meta Model API key
-pytest                 # 82 tests, no API key needed
+pytest                 # 96 tests, no API key needed
 ```
 
 ## Built during the hackathon

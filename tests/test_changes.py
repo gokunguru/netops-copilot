@@ -143,7 +143,7 @@ def test_journal_is_hash_chained_and_tamper_evident(store):
 
 def test_cli_apply_history_rollback_reset(capsys):
     assert cli.main([FIX, "--mock", "--yes"]) == 0
-    change_id = re.search(r"change (\w{10})", capsys.readouterr().out).group(1)
+    change_id = re.search(r"Change (\w{10}) applied", capsys.readouterr().out).group(1)
     assert cli.main([AUDIT, "--mock"]) == 0  # compliant now
     assert cli.main(["--history"]) == 0
     assert f"apply    {change_id}" in capsys.readouterr().out

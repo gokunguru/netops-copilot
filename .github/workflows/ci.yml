@@ -84,7 +84,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e . bandit pip-audit
+      - run: pip install -e ".[live]" bandit pip-audit
       - name: Static analysis (bandit)
         run: bandit -r src
       - name: Dependency vulnerabilities (pip-audit)
@@ -136,7 +136,7 @@ jobs:
           set -o pipefail
           AUDIT="Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs"
           netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --mock --yes | tee apply.txt
-          change_id=$(grep -oE "change [0-9a-f]{10}" apply.txt | head -1 | cut -d' ' -f2)
+          change_id=$(grep -oE "Change [0-9a-f]{10}" apply.txt | head -1 | cut -d' ' -f2)
           netops-copilot "$AUDIT" --mock
           netops-copilot --rollback "$change_id"
           code=0

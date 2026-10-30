@@ -9,6 +9,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException
@@ -18,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from netops_copilot import changes
+from netops_copilot import changes, drivers
 from netops_copilot.agent.pipeline import load_inventory, run
 from netops_copilot.cli import DEFAULT_INVENTORY
 from netops_copilot.models import Device, RunResult, Step
@@ -76,9 +77,9 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
     store = changes.Store(state_dir)
     runs: dict[str, Run] = {}
 
-    def devices() -> dict[str, Device]:
-        """Current lab: inventory configs, overridden by every approved change."""
-        return load_inventory(inventory, store)
+    def devices(live: bool = True) -> dict[str, Device]:
+        """Current state: lab configs (with approved changes) and running configs over SSH."""
+        return load_inventory(inventory, store, live=live)
 
     app = FastAPI(title="NetOps Copilot", version="0.1.0",
                   description="AI agent for validated multi-vendor network changes.")
@@ -104,7 +105,7 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
         return templates.TemplateResponse(request, "index.html", {
-            "examples": EXAMPLES, "mock": mock, "devices": devices().values(),
+            "examples": EXAMPLES, "mock": mock, "devices": devices(live=False).values(),
             "journal": list(reversed(store.journal()))[:6],
             "journal_ok": store.verify_journal()})
 
@@ -113,8 +114,12 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
         request = request.strip()
         if not request:
             raise HTTPException(422, "empty request")
+        try:
+            snapshot = devices()
+        except drivers.DriverError as exc:
+            return f'<div class="callout callout-fail"><strong>Cannot read the devices.</strong> {escape(str(exc))}</div>'
         r = Run(id=uuid.uuid4().hex[:8], request=request, faulty=mock and faulty == "1",
-                devices=devices())
+                devices=snapshot)
         runs[r.id] = r
         return render("run.html", run=r)
 
@@ -213,11 +218,12 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict:
         """Liveness probe for containers and load balancers."""
-        return {"status": "ok", "mock": mock, "devices": len(devices())}
+        return {"status": "ok", "mock": mock, "devices": len(devices(live=False))}
 
     @app.get("/api/inventory", tags=["api"])
     def api_inventory() -> list[dict]:
-        return [{"hostname": d.hostname, "vendor": d.vendor.value} for d in devices().values()]
+        return [{"hostname": d.hostname, "vendor": d.vendor.value, "live": d.live}
+                for d in devices(live=False).values()]
 
     @app.get("/api/changes", tags=["api"])
     def api_changes() -> dict:

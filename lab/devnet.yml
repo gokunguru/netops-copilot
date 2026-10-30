@@ -1,0 +1,20 @@
+# Live inventory: Cisco DevNet "Catalyst 8000 Always-On" sandbox (IOS XE), shared and public.
+#
+# 1. Reserve it on developer.cisco.com (Sandbox > Catalyst 8000 Always-On > Launch).
+#    The credentials appear in the Quick Access tab; they change at every reservation.
+# 2. export DEVNET_USERNAME=...  DEVNET_PASSWORD=...      (never commit them)
+# 3. pip install -e ".[live]"
+# 4. netops-copilot --inventory lab/devnet.yml --probe   (check `edge` below exists)
+#
+# Changes stay in the running config only (no "write memory").
+devices:
+  cat8k:
+    vendor: cisco_ios
+    driver:
+      host: devnetsandboxiosxe.cisco.com
+      port: 22
+      credentials_env: DEVNET
+    # Interfaces the ACL policy applies to. Adjust after --probe.
+    edge: [GigabitEthernet2]
+    # The SSH session runs through the management interface: never filtered by the agent.
+    protected: [GigabitEthernet1]

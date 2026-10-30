@@ -14,10 +14,6 @@ build/
 *.pem
 *.key
 
-# Containerlab runtime
-clab-*/
-lab/*.bak
-
 # Editors / OS
 .vscode/
 .idea/

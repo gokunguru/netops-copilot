@@ -48,7 +48,7 @@
         <ul class="inventory">
           {% for d in devices %}
             <li><span class="mono">{{ d.hostname }}</span>
-                <span class="vendor vendor-{{ d.vendor.value }}">{{ d.vendor.value | replace("_", " ") }}</span></li>
+                <span>{% if d.live %}<span class="badge badge-ok">live</span> {% endif %}<span class="vendor vendor-{{ d.vendor.value }}">{{ d.vendor.value | replace("_", " ") }}</span></span></li>
           {% endfor %}
         </ul>
       </section>

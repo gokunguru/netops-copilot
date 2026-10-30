@@ -21,6 +21,8 @@ from pathlib import Path
 
 import yaml
 
+from netops_copilot import drivers
+from netops_copilot.audit.acl import SERVICES
 from netops_copilot.lab import config_editor, simulator
 from netops_copilot.models import ChangeType, Device, RunResult, Vendor
 
@@ -227,23 +229,107 @@ def _inventory(items: list[tuple[str, Vendor, list[str]]]) -> str:
     }}, sort_keys=False)
 
 
+# ---------------------------------------------------------------- live devices
+
+def _canon(line: str) -> str:
+    """Semantic form of a config line: IOS shows 'eq 23' as 'eq telnet', 'eq 80' as 'eq www'."""
+    line = " ".join(line.split())
+    return re.sub(r"\b(eq|gt|lt|neq) (\S+)",
+                  lambda m: f"{m.group(1)} {SERVICES.get(m.group(2).lower(), m.group(2))}", line)
+
+
+def touched_headers(before: str, after: str) -> list[str]:
+    old, new = _blocks(before), _blocks(after)
+    return [h for h, children in new.items() if h not in old or children != old[h]]
+
+
+def blocks_of(config: str, headers: list[str]) -> dict[str, list[str] | None]:
+    blocks = _blocks(config)
+    return {h: ([_canon(c) for c in blocks[h]] if h in blocks else None) for h in headers}
+
+
+def only(config: str, headers: list[str]) -> str:
+    """The config reduced to some blocks: never reason about objects we did not touch."""
+    blocks = _blocks(config)
+    return "".join(f"{h}\n" + "".join(f"{c}\n" for c in blocks[h]) for h in headers if h in blocks)
+
+
+def _push_and_verify(device: Device, commands: list[str], expected: dict) -> str:
+    """Push, read the running config back, compare the touched blocks to what was validated."""
+    drivers.push(device, commands)
+    running = drivers.fetch_config(device)
+    if blocks_of(running, list(expected)) != expected:
+        raise ChangeError(f"{device.hostname}: running config differs from the validated "
+                          "candidate after the push")
+    return running
+
+
+def _apply_live(prepared: list["DeviceChange"], devices: dict[str, Device],
+                folder: Path) -> dict[str, dict]:
+    """All-or-nothing across devices: any failure rolls back every device already changed."""
+    done: list[tuple[DeviceChange, list[str], dict]] = []
+    evidence = {}
+    try:
+        for p in prepared:
+            device = devices[p.device]
+            headers = touched_headers(p.before, p.after)
+            expected_before, expected_after = blocks_of(p.before, headers), blocks_of(p.after, headers)
+            running = drivers.fetch_config(device)
+            (folder / f"{p.device}.before.cfg").write_text(running)
+            if blocks_of(running, headers) != expected_before:
+                raise ChangeError(f"{p.device} changed on the device since this run was "
+                                  "validated: run it again")
+            done.append((p, headers, expected_before))
+            after = _push_and_verify(device, p.commands, expected_after)
+            (folder / f"{p.device}.after.cfg").write_text(after)
+            evidence[p.device] = {"headers": headers, "blocks_before": expected_before,
+                                  "blocks_after": expected_after}
+    except (ChangeError, drivers.DriverError) as exc:
+        restored = []
+        for p, headers, expected_before in reversed(done):
+            device = devices[p.device]
+            try:
+                running = drivers.fetch_config(device)
+                if blocks_of(running, headers) != expected_before:
+                    # The push may have stopped half-way: invert what is really on the device.
+                    inverse = derive_rollback(p.vendor, only(p.before, headers),
+                                              only(running, headers))
+                    _push_and_verify(device, inverse, expected_before)
+                restored.append(p.device)
+            except (ChangeError, drivers.DriverError):
+                continue
+        failed = [p.device for p, _, _ in done if p.device not in restored]
+        note = (f" Rolled back automatically on: {', '.join(restored)}." if restored else "")
+        if failed:
+            note += f" MANUAL CHECK NEEDED on: {', '.join(failed)}."
+        raise ChangeError(f"{exc}.{note}") from exc
+    return evidence
+
+
+# ---------------------------------------------------------------- commit / rollback
+
 def commit(result: RunResult, devices: dict[str, Device], inventory: str | Path,
            store: Store, who: str | None = None) -> dict:
-    """Apply an approved run to the lab state. Returns the journal entry."""
+    """Apply an approved run: lab state for lab devices, SSH push for live ones."""
     from netops_copilot.agent.pipeline import load_inventory
 
     prepared = prepare(result, devices)
-    current = load_inventory(inventory, store)
-    for p in prepared:
-        if sha(current[p.device].config) != sha(p.before):
-            raise ChangeError(f"{p.device} changed since this run was validated: run it again")
+    lab = [p for p in prepared if not devices[p.device].live]
+    live = [p for p in prepared if devices[p.device].live]
+    if lab:
+        current = load_inventory(inventory, store, live=False)
+        for p in lab:
+            if sha(current[p.device].config) != sha(p.before):
+                raise ChangeError(f"{p.device} changed since this run was validated: run it again")
 
     who = who or operator()
     change_id = sha(json.dumps([result.request, [p.commands for p in prepared],
                                 datetime.now(UTC).isoformat()]))[:10]
-    title = f"NetOps Copilot change {change_id}: {result.intent.summary}"
     folder = store.changes / change_id
     folder.mkdir(parents=True, exist_ok=True)
+    evidence = _apply_live(live, devices, folder) if live else {}
+
+    title = f"NetOps Copilot change {change_id}: {result.intent.summary}"
     (folder / "playbook.yml").write_text(
         _playbook(title, [(p.device, p.vendor, p.commands) for p in prepared]))
     (folder / "rollback.yml").write_text(
@@ -254,14 +340,16 @@ def commit(result: RunResult, devices: dict[str, Device], inventory: str | Path,
         "id": change_id, "request": result.request, "summary": result.intent.summary,
         "operator": who, "devices": {p.device: {
             "vendor": p.vendor.value, "commands": p.commands, "rollback": p.rollback,
-            "before_sha256": norm_sha(p.before), "after_sha256": sha(p.after)}
-            for p in prepared},
+            "target": "live" if p.device in evidence else "lab",
+            "before_sha256": norm_sha(p.before), "after_sha256": sha(p.after),
+            **evidence.get(p.device, {})} for p in prepared},
     }, indent=2))
 
-    for p in prepared:
+    for p in lab:
         store.write_config(p.device, p.after)
     return store.append({"type": "apply", "change": change_id, "operator": who,
-                         "request": result.request, "devices": [p.device for p in prepared]})
+                         "request": result.request, "devices": [p.device for p in prepared],
+                         "live": sorted(evidence)})
 
 
 def rollback(change_id: str, inventory: str | Path, store: Store, who: str | None = None) -> dict:
@@ -270,16 +358,30 @@ def rollback(change_id: str, inventory: str | Path, store: Store, who: str | Non
     record = store.record(change_id)
     if any(e["type"] == "rollback" and e["change"] == change_id for e in store.journal()):
         raise ChangeError(f"change {change_id} was already rolled back")
-    current = load_inventory(inventory, store)
-    restored = {}
+    current = load_inventory(inventory, store, live=False)
+    restored, live = {}, []
     for host, info in record["devices"].items():
+        if info.get("target") == "live":
+            device = current[host]
+            running = drivers.fetch_config(device)
+            if blocks_of(running, info["headers"]) != info["blocks_after"]:
+                raise ChangeError(f"{host} changed after {change_id}: refusing to roll back over it")
+            live.append((device, info))
+            continue
         config = current[host].config
         if sha(config) != info["after_sha256"]:
             raise ChangeError(f"{host} changed after {change_id}: refusing to roll back over it")
         restored[host] = config_editor.apply(Vendor(info["vendor"]), config, info["rollback"])
         if norm_sha(restored[host]) != info["before_sha256"]:
             raise ChangeError(f"{host}: rollback did not restore the original")
+    for device, info in live:
+        try:
+            _push_and_verify(device, info["rollback"], info["blocks_before"])
+        except drivers.DriverError as exc:
+            raise ChangeError(str(exc)) from exc
     for host, text in restored.items():
         store.write_config(host, text)
     return store.append({"type": "rollback", "change": change_id, "operator": who or operator(),
-                         "request": record["request"], "devices": list(restored)})
+                         "request": record["request"],
+                         "devices": list(restored) + [d.hostname for d, _ in live],
+                         "live": sorted(d.hostname for d, _ in live)})

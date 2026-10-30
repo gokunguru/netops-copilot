@@ -43,8 +43,8 @@ def interface_actions(device: Device, flows: list[Flow]) -> dict[tuple[str, str]
 def interfaces_to_fix(device: Device, findings: list[Finding]) -> list[str]:
     flagged = {f.interface for f in findings if f.device == device.hostname and not f.compliant}
     if "(all)" in flagged:
-        return config_editor.interfaces(device.config)
-    return sorted(flagged)
+        flagged = set(config_editor.interfaces(device.config))
+    return sorted(flagged - set(device.protected))
 
 
 def context(device: Device, findings: list[Finding]) -> str:
@@ -82,7 +82,10 @@ def dry_run(flows: list[Flow], changes: list[ProposedChange], devices: dict[str,
         allowed = set(interfaces_to_fix(device, findings))
         before_f, after_f = acl.inbound_filters(device), acl.inbound_filters(candidate)
         for iface in sorted(set(before_f) | set(after_f)):
-            if before_f.get(iface) != after_f.get(iface) and iface not in allowed:
+            if before_f.get(iface) != after_f.get(iface) and iface in device.protected:
+                errors.append(f"{change.device}: {iface} is a protected interface, "
+                              "the agent may never change its filtering")
+            elif before_f.get(iface) != after_f.get(iface) and iface not in allowed:
                 errors.append(f"{change.device}: out of scope, inbound filter changed on {iface} "
                               f"which the audit did not flag (allowed: {', '.join(sorted(allowed))})")
 

@@ -25,15 +25,29 @@ from netops_copilot.models import (
 )
 
 
-def load_inventory(path: str | Path, store=None) -> dict[str, Device]:
-    """Devices from the inventory; configs changed by approved runs come from the lab state."""
+def load_inventory(path: str | Path, store=None, live: bool = True) -> dict[str, Device]:
+    """Devices from the inventory.
+
+    Lab devices: config file, overridden by approved changes kept in the lab state.
+    Live devices (with a `driver`): running config fetched over SSH (skipped if live=False).
+    """
+    from netops_copilot import drivers
+
     path = Path(path)
     data = yaml.safe_load(path.read_text())
-    return {
-        host: Device(hostname=host, vendor=d["vendor"],
-                     config=(store and store.config(host)) or (path.parent / d["config"]).read_text())
-        for host, d in data["devices"].items()
-    }
+    devices = {}
+    for host, d in data["devices"].items():
+        device = Device(hostname=host, vendor=d["vendor"], config="", edge=d.get("edge"),
+                        protected=d.get("protected", []), driver=d.get("driver"))
+        if device.live:
+            if not device.edge:
+                raise ValueError(f"{host}: a live device must list its edge interfaces "
+                                 "(the agent never guesses which interfaces it may filter)")
+            config = drivers.fetch_config(device) if live else ""
+        else:
+            config = (store and store.config(host)) or (path.parent / d["config"]).read_text()
+        devices[host] = device.model_copy(update={"config": config})
+    return devices
 
 
 def parse_intent(llm: LLM, request: str, devices: dict[str, Device]) -> Intent:

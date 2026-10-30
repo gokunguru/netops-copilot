@@ -59,6 +59,25 @@ def print_history(store) -> int:
     return 0 if store.verify_journal() else 5
 
 
+def probe(inventory: str) -> int:
+    from netops_copilot import drivers
+
+    devices = [d for d in load_inventory(inventory, live=False).values() if d.live]
+    if not devices:
+        print("No live device in this inventory (no `driver` entry).")
+        return 0
+    for d in devices:
+        try:
+            info = drivers.probe(d)
+        except drivers.DriverError as exc:
+            print(f"{d.hostname}: {exc}")
+            return 4
+        print(f"{d.hostname} ({d.driver['host']}) {' / '.join(info['version'])}")
+        print(f"  edge: {', '.join(d.edge)}   protected: {', '.join(d.protected) or '-'}")
+        print("  " + info["interfaces"].replace("\n", "\n  "))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="netops-copilot", description=__doc__)
     p.add_argument("request", nargs="?", help="plain-language change request")
@@ -70,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--yes", action="store_true", help="approve without prompting (lab only)")
     p.add_argument("--history", action="store_true", help="show the change journal")
     p.add_argument("--rollback", metavar="CHANGE_ID", help="roll back an applied change")
+    p.add_argument("--probe", action="store_true",
+                   help="connect to the live devices of the inventory and show their interfaces")
     p.add_argument("--reset-lab", action="store_true",
                    help="discard every applied change and the journal (demo reset)")
     args = p.parse_args(argv)
@@ -77,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.history:
         return print_history(store)
+    if args.probe:
+        return probe(args.inventory)
     if args.reset_lab:
         store.reset()
         print(f"Lab reset: configs back to the inventory, journal cleared ({store.root}).")
@@ -100,7 +123,13 @@ def main(argv: list[str] | None = None) -> int:
         from netops_copilot.llm.client import MetaClient
         llm = MetaClient()
 
-    devices = load_inventory(args.inventory, store)
+    from netops_copilot.drivers import DriverError
+
+    try:
+        devices = load_inventory(args.inventory, store)
+    except DriverError as exc:
+        print(f"Cannot read the devices: {exc}")
+        return 4
     result = run(llm, args.request, devices, max_retries=args.retries)
     print(render(result))
     if result.is_audit and not result.error:
@@ -119,8 +148,9 @@ def main(argv: list[str] | None = None) -> int:
         return 4
     folder = store.changes / entry["change"]
     record = store.record(entry["change"])
-    print(f"\nApplied to the lab as change {entry['change']} by {entry['operator']} "
-          f"(journal #{entry['seq']}).")
+    where = (f"pushed to {', '.join(entry['live'])} and verified on the running config"
+             if entry.get("live") else "applied to the lab")
+    print(f"\nChange {entry['change']} {where} by {entry['operator']} (journal #{entry['seq']}).")
     for host, info in record["devices"].items():
         print(f"  rollback {host}: " + " | ".join(c.strip() for c in info["rollback"]))
     print(f"  Ansible: {folder / 'playbook.yml'}  (rollback.yml, inventory.yml alongside)")

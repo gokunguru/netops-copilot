@@ -165,6 +165,21 @@ def audit(device: Device, flows: list[Flow]) -> list[Finding]:
     acls = parse_acls(device)
     filters = inbound_filters(device)
     findings: list[Finding] = []
+    if device.edge is not None:
+        # Explicit edge interfaces: each one is audited, filtered or not.
+        for interface in device.edge:
+            name = filters.get(interface)
+            for flow in flows:
+                if name is None:
+                    actual, matched = "permit", "no inbound ACL on this interface"
+                elif name not in acls:
+                    actual, matched = "permit", f"ACL {name} applied but not defined: permits all"
+                else:
+                    actual, matched = evaluate(flow, acls[name], device.vendor)
+                findings.append(Finding(device=device.hostname, interface=interface,
+                                        acl=name or "(none)", flow=flow, actual=actual,
+                                        matched=matched))
+        return findings
     if not filters:
         return [Finding(device=device.hostname, interface="(all)", acl="(none)", flow=f,
                         actual="permit", matched="no inbound ACL applied on any interface")

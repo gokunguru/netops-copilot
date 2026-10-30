@@ -27,6 +27,7 @@ netops-copilot-web = "netops_copilot.web.app:serve"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
+live = ["netmiko>=4.4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

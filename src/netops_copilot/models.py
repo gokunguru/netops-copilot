@@ -21,6 +21,16 @@ class Device(BaseModel):
     hostname: str
     vendor: Vendor
     config: str
+    # Interfaces the ACL policy applies to. None: every interface that has an inbound filter.
+    edge: list[str] | None = None
+    # Interfaces the agent must never modify (management, uplinks to the jump host...).
+    protected: list[str] = Field(default_factory=list)
+    # Live device connection settings (see drivers.py). None: offline lab model.
+    driver: dict | None = None
+
+    @property
+    def live(self) -> bool:
+        return self.driver is not None
 
 
 class VlanParams(BaseModel):
