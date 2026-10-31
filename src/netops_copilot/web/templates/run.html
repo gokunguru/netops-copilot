@@ -2,7 +2,10 @@
          hx-ext="sse" sse-connect="/runs/{{ run.id }}/events" sse-close="done">
   <header class="run-head">
     <span class="mono muted">#{{ run.id }}</span>
-    <p class="run-request">{{ run.request }}</p>
+    <p class="run-request">{{ run.request or ("Request read from the image" if run.images) }}</p>
+    {% if run.images %}<div class="thumbs">{% for img in run.images %}
+      <a href="/runs/{{ run.id }}/images/{{ loop.index0 }}" target="_blank" rel="noopener"><img
+         src="/runs/{{ run.id }}/images/{{ loop.index0 }}" alt="{{ img.name }}"></a>{% endfor %}</div>{% endif %}
     {% if run.faulty %}<span class="badge badge-warn">faulty model simulated</span>{% endif %}
   </header>
   <ol class="steps" sse-swap="step" hx-swap="beforeend"></ol>

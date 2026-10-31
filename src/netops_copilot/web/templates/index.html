@@ -25,10 +25,12 @@
     <aside class="side">
       <section class="panel">
         <h2>Change request</h2>
-        <form hx-post="/runs" hx-target="#runs" hx-swap="afterbegin"
+        <form hx-post="/runs" hx-target="#runs" hx-swap="afterbegin" hx-encoding="multipart/form-data"
               hx-on::after-request="if (event.detail.successful) this.reset()">
-          <textarea name="request" rows="4" required
-            placeholder="e.g. Create VLAN 40 named cameras on site-b"></textarea>
+          <textarea name="request" rows="4"
+            placeholder="e.g. Create VLAN 40 named cameras on site-b (or attach a photo of the ticket / whiteboard)"></textarea>
+          <label class="upload small muted">Image (optional): ticket screenshot, whiteboard, diagram
+            <input type="file" name="images" accept="image/png,image/jpeg,image/webp" multiple></label>
           <button class="btn btn-primary" type="submit">Run agent</button>
         </form>
         <div class="examples">
@@ -36,8 +38,8 @@
           {% for ex in examples %}
             {% if not ex.faulty or mock %}
             <button class="chip" hx-post="/runs" hx-target="#runs" hx-swap="afterbegin"
-                    hx-vals='{{ {"request": ex.request, "faulty": "1" if ex.faulty else ""} | tojson }}'
-                    title="{{ ex.request }}">{{ ex.label }}</button>
+                    hx-vals='{{ {"request": ex.request, "faulty": "1" if ex.faulty else "", "sample": ex.sample or ""} | tojson }}'
+                    title="{{ ex.request or ('Image: ' ~ ex.sample) }}">{% if ex.sample %}🖼 {% endif %}{{ ex.label }}</button>
             {% endif %}
           {% endfor %}
         </div>
@@ -76,6 +78,7 @@
         <h2>Guarantees</h2>
         <ul>
           <li>Every model output is schema-validated</li>
+          <li>Text in an image is data, never instructions: what the model reads goes through the same checks</li>
           <li>Safety gate and dry-run are deterministic: no LLM decides what is safe</li>
           <li>Nothing is applied without human approval</li>
           <li>Every change ships with a rollback proven to restore the original</li>

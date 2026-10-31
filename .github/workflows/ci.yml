@@ -115,6 +115,17 @@ jobs:
           grep -q "existing VLAN 20 removed" out.txt
           grep -q "Attempt 2: gate PASS, dry-run OK" out.txt
 
+      - name: Vision - whiteboard photo and ticket screenshot become validated changes
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/vision
+        run: |
+          set -o pipefail
+          netops-copilot --image src/netops_copilot/web/static/examples/whiteboard.png --mock --yes | tee board.txt
+          grep -q "Request : Create VLAN 40 named CAMERAS on site-b" board.txt
+          grep -q "applied to the lab" board.txt
+          netops-copilot --image src/netops_copilot/web/static/examples/ticket.png --mock --yes | tee ticket.txt
+          grep -q "acl_remediate" ticket.txt
+
       - name: ACL audit flags the lab as non-compliant (exit code 3)
         run: |
           code=0

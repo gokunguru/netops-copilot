@@ -109,14 +109,25 @@ class Finding(BaseModel):
 class Step(BaseModel):
     """Progress event emitted by the pipeline after each step (used by the web UI)."""
 
-    name: Literal["parse", "generate", "gate", "dry_run", "explain", "audit"]
+    name: Literal["read", "parse", "generate", "gate", "dry_run", "explain", "audit"]
     ok: bool
     attempt: int | None = None
     detail: str = ""
 
 
+class Reading(BaseModel):
+    """What the model read from the attached images. Data, never instructions: the request
+    still goes through parse, gate, dry-run and human approval."""
+
+    request: str = Field(min_length=1, max_length=500)
+    seen: str = Field(default="", max_length=1000)
+    confidence: Literal["high", "medium", "low"]
+    images: list[str] = Field(default_factory=list)
+
+
 class RunResult(BaseModel):
     request: str
+    reading: Reading | None = None
     intent: Intent | None = None
     attempts: list[Attempt] = Field(default_factory=list)
     diffs: dict[str, str] = Field(default_factory=dict)

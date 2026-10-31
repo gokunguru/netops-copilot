@@ -33,7 +33,7 @@ live = ["netmiko>=4.4"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-netops_copilot = ["web/templates/*.html", "web/static/*"]
+netops_copilot = ["web/templates/*.html", "web/static/*", "web/static/examples/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -52,3 +52,6 @@ skip_covered = true
 [tool.ruff]
 line-length = 100
 extend-exclude = ["src/netops_copilot/web/static"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.File", "fastapi.Form"]

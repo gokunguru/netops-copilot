@@ -137,3 +137,8 @@ form .btn { margin-top: 10px; width: 100%; }
 .journal li { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; flex-wrap: wrap; }
 .pill-warn { background: var(--warn-bg); color: var(--warn); }
 .fail { color: var(--fail); }
+.upload { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 10px; }
+.upload input { font-size: 12px; color: var(--muted); }
+.thumbs { display: flex; gap: 8px; flex-wrap: wrap; width: 100%; }
+.thumbs img { max-height: 110px; max-width: 100%; border-radius: 6px; border: 1px solid var(--border); display: block; }
+.reading { border-left: 3px solid var(--accent); padding: 4px 10px; margin-bottom: 12px; }

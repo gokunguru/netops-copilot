@@ -14,7 +14,12 @@ DEFAULT_INVENTORY = Path(os.getenv("NETOPS_INVENTORY")
 
 
 def render(result: RunResult) -> str:
-    out = [f"Request : {result.request}"]
+    out = []
+    if result.reading:
+        r = result.reading
+        out += [f"Image   : {', '.join(r.images)}  (read by the model, confidence {r.confidence})",
+                f"Seen    : {r.seen}"]
+    out.append(f"Request : {result.request}")
     if result.intent:
         out.append(f"Intent  : {result.intent.summary}  "
                    f"[{result.intent.change_type.value}, targets={result.intent.targets}]")
@@ -82,6 +87,9 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="netops-copilot", description=__doc__)
     p.add_argument("request", nargs="?", help="plain-language change request")
     p.add_argument("--inventory", default=str(DEFAULT_INVENTORY))
+    p.add_argument("--image", action="append", default=[], metavar="PATH",
+                   help="photo, screenshot or diagram of the request (repeatable); "
+                        "the request text then becomes an optional note")
     p.add_argument("--mock", action="store_true", help="offline deterministic model, no API call")
     p.add_argument("--mock-faulty", action="store_true",
                    help="mock model that first proposes a destructive change (demo of the retry loop)")
@@ -120,8 +128,15 @@ def main(argv: list[str] | None = None) -> int:
         if entry["already_reverted"]:
             print(f"  Already reverted outside the tool: {', '.join(entry['already_reverted'])}.")
         return 0
-    if not args.request:
-        p.error("a change request is required (or --history, --rollback, --reset-lab)")
+    if not args.request and not args.image:
+        p.error("a change request or --image is required (or --history, --rollback, --reset-lab)")
+    from netops_copilot import vision
+
+    try:
+        images = [vision.load_path(path) for path in args.image]
+    except (OSError, vision.ImageError) as exc:
+        print(f"Cannot use the image: {exc}")
+        return 1
 
     if args.mock or args.mock_faulty:
         from netops_copilot.llm.mock import MockLLM
@@ -137,14 +152,17 @@ def main(argv: list[str] | None = None) -> int:
     except DriverError as exc:
         print(f"Cannot read the devices: {exc}")
         return 4
-    result = run(llm, args.request, devices, max_retries=args.retries)
+    result = run(llm, args.request or "", devices, max_retries=args.retries, images=images)
     print(render(result))
     if result.is_audit and not result.error:
         return 0 if result.compliant else 3  # read-only: nothing to approve
     if not result.ready_for_approval:
         return 1
 
-    approved = args.yes or input("\nApprove this change? [y/N] ").strip().lower() == "y"
+    try:
+        approved = args.yes or input("\nApprove this change? [y/N] ").strip().lower() == "y"
+    except EOFError:  # no terminal (piped, CI): never approve implicitly
+        approved = False
     if not approved:
         print("Rejected by operator. Nothing was applied.")
         return 2

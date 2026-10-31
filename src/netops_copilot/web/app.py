@@ -5,21 +5,23 @@ Run it with:  netops-copilot-web --mock   (offline)   or   netops-copilot-web   
 
 import argparse
 import asyncio
+import base64
+import binascii
 import os
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.requests import Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from netops_copilot import changes, drivers
+from netops_copilot import changes, drivers, vision
 from netops_copilot.agent.pipeline import load_inventory, run
 from netops_copilot.cli import DEFAULT_INVENTORY
 from netops_copilot.models import Device, RunResult, Step
@@ -28,7 +30,7 @@ HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
 
 STEP_LABELS = {
-    "parse": "Parse intent", "generate": "Generate config", "gate": "Safety gate",
+    "read": "Read image", "parse": "Parse intent", "generate": "Generate config", "gate": "Safety gate",
     "dry_run": "Dry-run", "explain": "Explain", "audit": "ACL audit",
 }
 EXAMPLES = [
@@ -41,7 +43,10 @@ EXAMPLES = [
     {"label": "ACL auto-fix",
      "request": "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed",
      "faulty": True},
+    {"label": "Ticket screenshot", "request": "", "sample": "ticket.png", "faulty": False},
+    {"label": "Whiteboard photo", "request": "", "sample": "whiteboard.png", "faulty": False},
 ]
+SAMPLES = HERE / "static" / "examples"
 
 
 @dataclass
@@ -50,6 +55,7 @@ class Run:
     request: str
     faulty: bool
     devices: dict[str, Device]  # snapshot the run was validated against
+    images: list[vision.Image] = field(default_factory=list)
     started: bool = False
     result: RunResult | None = None
     error: str = ""
@@ -59,7 +65,15 @@ class Run:
 
 
 class RunRequest(BaseModel):
-    request: str
+    request: str = ""
+    images: list[str] = []  # base64, or data: URLs
+
+
+def decode_image(text: str, n: int) -> vision.Image:
+    try:
+        return vision.load(base64.b64decode(text.split(",", 1)[-1], validate=True), f"image-{n}")
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(422, f"image {n}: {exc}") from exc
 
 
 def sse(event: str, data: str) -> str:
@@ -110,16 +124,30 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
             "journal_ok": store.verify_journal()})
 
     @app.post("/runs", response_class=HTMLResponse)
-    def create_run(request: str = Form(...), faulty: str = Form("")):
+    async def create_run(request: str = Form(""), faulty: str = Form(""), sample: str = Form(""),
+                         images: list[UploadFile] = File(default=[])):
         request = request.strip()
-        if not request:
+        try:
+            loaded = [vision.load(data, f.filename) for f in images if f.filename
+                      and (data := await f.read(vision.MAX_BYTES + 1))]
+            if sample:
+                if sample not in {ex.get("sample") for ex in EXAMPLES}:
+                    raise HTTPException(404, "unknown sample image")
+                loaded.append(vision.load_path(SAMPLES / sample))
+            vision.check_count(loaded)
+        except vision.ImageError as exc:
+            return f'<div class="callout callout-fail"><strong>Image refused.</strong> {escape(str(exc))}</div>'
+        if not request and not loaded:
             raise HTTPException(422, "empty request")
+        return await asyncio.to_thread(start_run, request, faulty, loaded)
+
+    def start_run(request: str, faulty: str, loaded: list[vision.Image]) -> str:
         try:
             snapshot = devices()
         except drivers.DriverError as exc:
             return f'<div class="callout callout-fail"><strong>Cannot read the devices.</strong> {escape(str(exc))}</div>'
         r = Run(id=uuid.uuid4().hex[:8], request=request, faulty=mock and faulty == "1",
-                devices=snapshot)
+                devices=snapshot, images=loaded)
         runs[r.id] = r
         return render("run.html", run=r)
 
@@ -142,7 +170,8 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
                 loop.call_soon_threadsafe(queue.put_nowait, step)
 
             def work() -> RunResult:
-                return run(make_llm(r.faulty), r.request, r.devices, max_retries, on_step)
+                return run(make_llm(r.faulty), r.request, r.devices, max_retries, on_step,
+                           images=r.images)
 
             task = asyncio.create_task(asyncio.to_thread(work))
             while not (task.done() and queue.empty()):
@@ -162,6 +191,14 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.get("/runs/{run_id}/images/{n}")
+    def run_image(run_id: str, n: int) -> Response:
+        images = get_run(run_id).images
+        if not 0 <= n < len(images):
+            raise HTTPException(404)
+        return Response(images[n].data, media_type=images[n].mime,
+                        headers={"X-Content-Type-Options": "nosniff"})
 
     @app.post("/runs/{run_id}/{decision}", response_class=HTMLResponse)
     def decide(run_id: str, decision: str):
@@ -208,8 +245,15 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
 
     @app.post("/api/runs", tags=["api"])
     def api_run(body: RunRequest) -> dict:
-        """Run the full pipeline synchronously and return the result (no approval)."""
-        result = run(make_llm(False), body.request, devices(), max_retries)
+        """Run the full pipeline synchronously and return the result (no approval).
+
+        `images`: optional photos, screenshots or diagrams (base64 or data: URLs), read by the
+        model into the request; `request` is then an optional note.
+        """
+        if len(body.images) > vision.MAX_IMAGES or not (body.request.strip() or body.images):
+            raise HTTPException(422, f"a request or 1 to {vision.MAX_IMAGES} images are required")
+        images = [decode_image(text, n) for n, text in enumerate(body.images)]
+        result = run(make_llm(False), body.request.strip(), devices(), max_retries, images=images)
         return result.model_dump(mode="json") | {
             "ready_for_approval": result.ready_for_approval,
             "compliant": result.compliant if result.is_audit else None,

@@ -1,10 +1,14 @@
 """Deterministic stand-in for Muse Spark, for offline demos and tests (--mock).
 It only understands simple VLAN, ACL audit and ACL fix requests. The real agent runs on Meta Model API.
+It cannot see pixels: for images it reads the expected reading stored in the PNG metadata of the
+sample images (docs/examples). Muse Spark reads the image itself.
 """
 
+import base64
 import json
 import re
 
+from netops_copilot import vision
 from netops_copilot.agent import prompts
 
 # service keyword -> (protocol, port)
@@ -23,6 +27,9 @@ class MockLLM:
 
     def chat(self, messages: list[dict], **kwargs) -> str:
         system, user = messages[0]["content"], messages[-1]["content"]
+        if system == prompts.VISION_SYSTEM:
+            self.calls.append("read")
+            return self._read(user)
         if system == prompts.PARSE_SYSTEM:
             self.calls.append("parse")
             return self._parse(user)
@@ -47,6 +54,20 @@ class MockLLM:
                     "Risk: medium (filtering change on edge interfaces, validated by re-audit).")
         return ("Creates VLAN on the target devices only. Existing VLANs, interfaces and "
                 "routing are untouched.\nRisk: low (additive change, no port reassignment).")
+
+    @staticmethod
+    def _read(content: list[dict]) -> str:
+        for part in content:
+            if part["type"] != "image_url":
+                continue
+            data = base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
+            meta = vision.png_text(data) if data.startswith(b"\x89PNG") else {}
+            if vision.DEMO_KEY in meta:
+                return json.dumps({"request": meta[vision.DEMO_KEY],
+                                   "seen": meta.get("netops:seen", "A sample image."),
+                                   "confidence": meta.get("netops:confidence", "high")})
+        return json.dumps({"error": "the offline model only reads the sample images in "
+                                    "docs/examples (run without --mock to let Muse Spark read it)"})
 
     @staticmethod
     def _parse(user: str) -> str:

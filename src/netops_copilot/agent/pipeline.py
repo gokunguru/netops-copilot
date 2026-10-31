@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from netops_copilot import gate
+from netops_copilot import gate, vision
 from netops_copilot.agent import prompts
 from netops_copilot.audit import acl, remediation
 from netops_copilot.lab import simulator
@@ -19,6 +19,7 @@ from netops_copilot.models import (
     Device,
     Intent,
     ProposedChange,
+    Reading,
     RunResult,
     Step,
     VlanParams,
@@ -48,6 +49,25 @@ def load_inventory(path: str | Path, store=None, live: bool = True) -> dict[str,
             config = (store and store.config(host)) or (path.parent / d["config"]).read_text()
         devices[host] = device.model_copy(update={"config": config})
     return devices
+
+
+def read_images(llm: LLM, images: list[vision.Image], note: str,
+                devices: dict[str, Device]) -> Reading:
+    """Muse Spark reads the images and writes a plain-language request (nothing else)."""
+    vision.check_count(images)
+    inventory = {h: d.vendor.value for h, d in devices.items()}
+    reply = llm.chat([
+        {"role": "system", "content": prompts.VISION_SYSTEM},
+        {"role": "user", "content": vision.content(prompts.vision_user(note, inventory), images)},
+    ])
+    data = extract_json(reply)
+    if "error" in data:
+        raise ValueError(f"no change request found in the image: {data['error']}")
+    reading = Reading(**data, images=[i.name for i in images])
+    if reading.confidence == "low":
+        raise ValueError(f"image hard to read, nothing was planned. Read as: \"{reading.request}\". "
+                         "Type the request to confirm it, or attach a clearer image")
+    return reading
 
 
 def parse_intent(llm: LLM, request: str, devices: dict[str, Device]) -> Intent:
@@ -214,14 +234,25 @@ def run_remediation(llm: LLM, result: RunResult, devices: dict[str, Device], max
 
 
 def run(llm: LLM, request: str, devices: dict[str, Device], max_retries: int = 3,
-        on_step: OnStep = _noop) -> RunResult:
+        on_step: OnStep = _noop, images: list[vision.Image] | None = None) -> RunResult:
     """Full pipeline. Never pushes anything: returns a result for human approval.
 
     on_step is called after every step, so a UI can show progress live.
+    With images, the model first reads them into a plain-language request (the `read` step);
+    `request` is then an optional operator note. The reading goes through the same checks.
     """
     result = RunResult(request=request)
+    if images:
+        try:
+            result.reading = read_images(llm, images, request, devices)
+        except (*ParseErrors, vision.ImageError) as exc:
+            result.error = f"read step failed: {exc}"
+            on_step(Step(name="read", ok=False, detail=str(exc)))
+            return result
+        on_step(Step(name="read", ok=True, detail=result.reading.request))
+        result.request = result.reading.request + (f" (operator note: {request})" if request else "")
     try:
-        result.intent = parse_intent(llm, request, devices)
+        result.intent = parse_intent(llm, result.request, devices)
     except ParseErrors as exc:
         result.error = f"parse step failed: {exc}"
         on_step(Step(name="parse", ok=False, detail=str(exc)))

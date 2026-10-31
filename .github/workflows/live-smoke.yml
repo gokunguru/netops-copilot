@@ -46,3 +46,12 @@ jobs:
       - name: ACL auto-fix on Muse Spark
         run: |
           netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --yes
+
+      - name: Vision on Muse Spark - the model reads the whiteboard pixels (no metadata used)
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/vision
+        run: |
+          set -o pipefail
+          netops-copilot --image src/netops_copilot/web/static/examples/whiteboard.png --yes | tee board.txt
+          grep -q "vlan_provision, targets=\['site-b'\]" board.txt
+          grep -qi "name CAMERAS" board.txt

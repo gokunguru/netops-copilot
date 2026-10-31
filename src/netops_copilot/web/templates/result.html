@@ -1,4 +1,8 @@
 {% set res = run.result %}
+{% if res and res.reading %}
+  <div class="reading small"><strong>Read from {{ res.reading.images | join(", ") }}</strong>
+    <span class="muted">(confidence {{ res.reading.confidence }})</span>: {{ res.reading.seen }}</div>
+{% endif %}
 {% if run.error or (res and res.error) %}
   <div class="callout callout-fail">
     <strong>Stopped.</strong> <span class="mono">{{ run.error or res.error }}</span>
