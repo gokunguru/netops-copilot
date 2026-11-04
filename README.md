@@ -6,7 +6,7 @@
 
 **[Demo video](https://youtu.be/gocL080HaWk)** (2:45) · **[Live demo](https://gokunguru--netops-copilot-demo-web.us-east.modal.run)**: no sign-up, no API key. A private lab per visitor on a deterministic stand-in model, plus recordings of runs on the real Muse Spark API.
 
-[![NetOps Copilot demo video](docs/video.jpg)](https://youtu.be/gocL080HaWk)
+[![NetOps Copilot demo video](docs/video.jpg)](https://youtu.be/Xh9V5aYXD3I)
 
 A **Meta Global AI Developer Hackathon** project (Indie track, *Build for Your World*), built Oct 26 – Nov 4, 2026: see [what was built during the hackathon](#what-was-built-during-the-hackathon).
 
