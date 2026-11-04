@@ -1,0 +1,12 @@
+# Versioned policy: reviewed in pull requests like code, checked on a schedule by CI.
+name: edge-acl-baseline
+description: >-
+  Internet-facing interfaces block legacy management and file sharing,
+  and keep HTTPS open for the customer portal.
+owner: security-operations
+severity: high
+devices: all
+flows:
+  - {label: telnet, protocol: tcp, dst_port: 23, expected: deny}
+  - {label: smb, protocol: tcp, dst_port: 445, expected: deny}
+  - {label: https, protocol: tcp, dst_port: 443, expected: permit}

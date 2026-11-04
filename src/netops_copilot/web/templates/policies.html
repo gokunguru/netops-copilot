@@ -1,0 +1,15 @@
+<ul class="policies">
+  {% for r in results %}
+    <li>
+      <span class="pill {{ 'pill-ok' if r.compliant else 'pill-fail' }}">{{ 'OK' if r.compliant else 'DRIFT' }}</span>
+      <span class="mono" title="{{ r.policy.description }}">{{ r.policy.name }}</span>
+      <span class="muted small">{{ r.policy.severity }}{% if not r.compliant %} · {{ r.failed | length }}/{{ r.rows | length }} failed{% endif %}</span>
+      {% if not r.compliant %}
+        <button class="chip" hx-post="/runs" hx-target="#runs" hx-swap="afterbegin"
+                hx-vals='{{ {"enforce": r.policy.name} | tojson }}'
+                title="Propose the change that brings the devices back into this policy">Enforce</button>
+      {% endif %}
+    </li>
+  {% endfor %}
+</ul>
+<p class="muted small">Versioned in <span class="mono">policies/</span>, checked daily in CI · <a class="link" href="/api/policies">JSON</a></p>

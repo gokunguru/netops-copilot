@@ -1,0 +1,56 @@
+name: Policy drift check
+
+# Checks the inventory against the versioned policies in policies/ every day, without any
+# model, and keeps one GitHub issue in sync with the result (opened, updated, closed).
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      inventory:
+        description: Inventory to check (lab/devnet.yml needs the DEVNET_* secrets)
+        default: lab/inventory.yml
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: policy-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVENTORY: ${{ inputs.inventory || 'lab/inventory.yml' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[live]"
+
+      - name: Check policies (deterministic, no model)
+        id: check
+        env:
+          DEVNET_USERNAME: ${{ secrets.DEVNET_USERNAME }}
+          DEVNET_PASSWORD: ${{ secrets.DEVNET_PASSWORD }}
+        run: |
+          code=0
+          netops-copilot --check-policies --inventory "$INVENTORY" --report drift.md || code=$?
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then exit "$code"; fi
+          if [ "$code" -eq 3 ]; then drift=true; else drift=false; fi
+          echo "drift=$drift" >> "$GITHUB_OUTPUT"
+          cat drift.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open, update or close the drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRIFT: ${{ steps.check.outputs.drift }}
+        run: .github/scripts/drift-issue.sh

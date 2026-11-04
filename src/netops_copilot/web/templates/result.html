@@ -1,0 +1,97 @@
+{% set res = run.result %}
+{% if res and res.reading %}
+  <div class="reading small"><strong>Read from {{ res.reading.images | join(", ") }}</strong>
+    <span class="muted">(confidence {{ res.reading.confidence }})</span>: {{ res.reading.seen }}</div>
+{% endif %}
+{% if res and res.investigation and res.investigation.answer %}
+  <div class="reading small"><strong>Agent found</strong>
+    <span class="muted">({{ res.investigation.calls | length }} tool calls)</span>: {{ res.investigation.answer }}</div>
+{% endif %}
+{% if run.error or (res and res.error) %}
+  <div class="callout callout-fail">
+    <strong>Stopped.</strong> <span class="mono">{{ run.error or res.error }}</span>
+    <p class="muted">Nothing was proposed, nothing was applied.</p>
+  </div>
+{% elif res.answered %}
+  <div class="callout callout-ok"><strong>Answered, nothing to change.</strong>
+    <p class="muted">The agent only used read-only tools; no change was proposed.</p></div>
+{% elif res.is_audit %}
+  {% set failed = res.findings | rejectattr("compliant") | list %}
+  <div class="verdict {{ 'verdict-ok' if res.compliant else 'verdict-fail' }}">
+    {{ 'COMPLIANT' if res.compliant else 'NON-COMPLIANT' }}
+    <span class="muted">· {{ failed | length }} of {{ res.findings | length }} checks failed</span>
+  </div>
+  {% set findings = res.findings %}{% include "findings_table.html" %}
+  <div class="explanation"><h3>Explanation</h3><p>{{ res.explanation }}</p></div>
+  <p class="muted small">Read-only audit: no change proposed.</p>
+{% elif not res.ready_for_approval %}
+  <div class="callout callout-ok"><strong>Nothing to change.</strong> {{ res.explanation }}</div>
+{% else %}
+  {% if res.findings %}
+    {% set findings = res.findings %}
+    <details class="before">
+      <summary>Audit before fix: {{ findings | rejectattr("compliant") | list | length }} of
+        {{ findings | length }} checks failed</summary>
+      {% include "findings_table.html" %}
+    </details>
+  {% endif %}
+  <div class="diffs">
+    {% for host, diff in res.diffs.items() %}
+      <div class="diff">
+        <div class="diff-head mono">{{ host }}
+          <span class="muted">{{ (res.final_changes | selectattr("device", "equalto", host) | first).vendor.value }}</span></div>
+        <pre>{% for line in diff.splitlines() %}{% if line.startswith('+++') or line.startswith('---') %}<span class="d-meta">{{ line }}</span>
+{% elif line.startswith('@@') %}<span class="d-hunk">{{ line }}</span>
+{% elif line.startswith('+') %}<span class="d-add">{{ line }}</span>
+{% elif line.startswith('-') %}<span class="d-del">{{ line }}</span>
+{% else %}<span>{{ line }}</span>
+{% endif %}{% endfor %}</pre>
+      </div>
+    {% endfor %}
+  </div>
+  <div class="commands">
+    <h3>Commands to apply</h3>
+    {% for c in res.final_changes %}
+      <div class="mono small"><strong>{{ c.device }}</strong>: {{ c.commands | map("trim") | join(" · ") }}</div>
+    {% endfor %}
+  </div>
+  <div class="explanation"><h3>Explanation</h3><p>{{ res.explanation }}</p>
+    {% if res.risk %}<p class="risk small"><span class="pill {{ 'pill-ok' if res.risk.level == 'low' else ('pill-warn' if res.risk.level == 'medium' else 'pill-fail') }}">risk floor: {{ res.risk.level }}</span>
+      <span class="muted">deterministic · {{ res.risk.reasons | join("; ") }}</span></p>{% endif %}</div>
+  {% if res.review %}{% set rv = res.review %}
+  <div class="review {{ 'review-escalate' if rv.escalated else 'review-ok' }}">
+    <h3>Independent review · <span class="{{ 'fail' if rv.escalated else 'ok' }}">{{ 'ESCALATED to you' if rv.escalated else 'approved' }}</span></h3>
+    <p class="muted small">Separate session of {{ rv.model }}: it saw the request and the change, never the generator's reasoning, and can only escalate · {{ rv.calls | length }} read-only tool calls</p>
+    <p>{{ rv.summary }}</p>
+    {% for c in rv.concerns %}<div class="small"><span class="pill {{ 'pill-fail' if c.severity == 'high' else ('pill-warn' if c.severity == 'medium' else 'pill-ok') }}">{{ c.severity }}</span>
+      {% if c.device %}<span class="mono">{{ c.device }}</span>: {% endif %}{{ c.text }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if run.replay %}
+    {% set o = run.replay.outcome %}
+    <div class="callout {{ 'callout-ok' if o.decision == 'approved' else ('callout-fail' if o.decision == 'failed' else '') }}">
+      {% if o.decision == "approved" %}
+        <strong>Approved by the operator</strong>, change <span class="mono">{{ o.change }}</span> {{ o.where }}.
+        {% for host, cmds in o.rollback.items() %}
+          <div class="mono small"><strong>rollback {{ host }}</strong>: {{ cmds | map("trim") | join(" · ") }}</div>
+        {% endfor %}
+      {% elif o.decision == "failed" %}<strong>Not applied.</strong> {{ o.detail }}
+      {% elif o.decision == "rejected" %}<strong>Rejected by the operator.</strong> Nothing was applied.
+      {% else %}<strong>Not approved during the recording.</strong>{% endif %}
+      <p class="muted small">Recording: read-only playback, nothing is sent to any device.</p>
+    </div>
+  {% else %}
+  <div class="approval" id="decision-{{ run.id }}">
+    {% if res.escalated %}
+    <button class="btn btn-warn" hx-post="/runs/{{ run.id }}/approve" hx-vals='{"ack": "1"}'
+            hx-confirm="This change was escalated to a human ({{ 'independent reviewer' if res.review and res.review.escalated else 'control-plane rule' }}). Approve anyway?"
+            hx-target="#decision-{{ run.id }}" hx-swap="outerHTML">Approve despite concerns</button>
+    {% else %}
+    <button class="btn btn-primary" hx-post="/runs/{{ run.id }}/approve"
+            hx-target="#decision-{{ run.id }}" hx-swap="outerHTML">Approve</button>
+    {% endif %}
+    <button class="btn" hx-post="/runs/{{ run.id }}/reject"
+            hx-target="#decision-{{ run.id }}" hx-swap="outerHTML">Reject</button>
+  </div>
+  {% endif %}
+{% endif %}

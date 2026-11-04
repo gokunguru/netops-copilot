@@ -1,0 +1,8 @@
+name: standard-vlans
+description: Every device carries the management and voice VLANs with their standard names.
+owner: network-engineering
+severity: medium
+devices: all
+vlans:
+  - {vlan_id: 10, name: MGMT}
+  - {vlan_id: 20, name: VOICE}

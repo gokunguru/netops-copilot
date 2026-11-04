@@ -1,0 +1,58 @@
+[project]
+name = "netops-copilot"
+version = "0.1.0"
+description = "Plain-language network changes for Cisco IOS and Huawei VRP: Muse Spark proposes, deterministic checks decide, a human approves"
+authors = [{ name = "Kamil Mandi" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27",
+  "pydantic>=2",
+  "python-dotenv>=1",
+  "pyyaml>=6",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+netops-copilot = "netops_copilot.cli:main"
+netops-copilot-web = "netops_copilot.web.app:serve"
+netops-copilot-bench = "netops_copilot.bench:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
+live = ["netmiko>=4.4"]  # real devices over SSH
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=68"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+netops_copilot = ["web/templates/*.html", "web/static/*", "web/static/examples/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning:starlette.*", "ignore::DeprecationWarning:fastapi.*"]
+
+[tool.coverage.run]
+source = ["netops_copilot"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 88
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+extend-exclude = ["src/netops_copilot/web/static"]
+line-length = 100
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.File", "fastapi.Form"]

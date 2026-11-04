@@ -1,0 +1,422 @@
+{
+ "title": "Independent reviewer on open weights escalates a filtered core uplink",
+ "recorded": "2026-11-02 09:26 UTC",
+ "model": "muse-spark-1.3 (Meta Model API)",
+ "target": "lab simulator: Cisco IOS and Huawei VRP config models",
+ "request": "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed",
+ "duration": 88.6,
+ "steps": [
+  {
+   "name": "parse",
+   "ok": true,
+   "attempt": null,
+   "detail": "Remediate inbound ACLs on all devices to deny telnet and SMB and permit HTTPS.",
+   "t": 6.75
+  },
+  {
+   "name": "audit",
+   "ok": false,
+   "attempt": null,
+   "detail": "4 non-compliant, to fix on: site-a, site-b, core",
+   "t": 6.75
+  },
+  {
+   "name": "generate",
+   "ok": true,
+   "attempt": 1,
+   "detail": "site-a: ip access-list extended EDGE-IN | 35 deny tcp any any eq 445; site-b: acl number 3000 | rule 15 deny tcp destination-port eq 23; core: ip access-list extended FIX-IN | 10 deny tcp any any eq 23 | 20 deny tcp any any eq 445 | 30 permit ip any any | interface GigabitEthernet0/0 | ip access-group FIX-IN in",
+   "t": 33.17
+  },
+  {
+   "name": "gate",
+   "ok": true,
+   "attempt": 1,
+   "detail": "PASS",
+   "t": 33.17
+  },
+  {
+   "name": "dry_run",
+   "ok": true,
+   "attempt": 1,
+   "detail": "all post-checks passed",
+   "t": 33.17
+  },
+  {
+   "name": "review_tool",
+   "ok": true,
+   "attempt": null,
+   "detail": "list_devices(state=candidate) \u2192 [{\"hostname\": \"site-a\", \"vendor\": \"cisco_ios\", \"live\": false, \"edge_interfaces\": null, \"protected_interfaces\": []}, {\"hostname\": \"site-b\", \"vendor\": \"huawei_...",
+   "t": 35.32
+  },
+  {
+   "name": "review_tool",
+   "ok": true,
+   "attempt": null,
+   "detail": "list_interfaces(device=site-a, state=candidate) \u2192 [{\"interface\": \"GigabitEthernet0/0\", \"description\": \"WAN\", \"inbound_filter\": \"EDGE-IN\", \"edge\": null, \"protected\": false}, {\"interface\": \"GigabitEthernet0/1\"...",
+   "t": 35.32
+  },
+  {
+   "name": "review_tool",
+   "ok": true,
+   "attempt": null,
+   "detail": "list_interfaces(device=site-b, state=candidate) \u2192 [{\"interface\": \"GigabitEthernet0/0/0\", \"description\": \"WAN\", \"inbound_filter\": \"3000\", \"edge\": null, \"protected\": false}, {\"interface\": \"GigabitEthernet0/0/1...",
+   "t": 35.32
+  },
+  {
+   "name": "review_tool",
+   "ok": true,
+   "attempt": null,
+   "detail": "list_interfaces(device=core, state=candidate) \u2192 [{\"interface\": \"GigabitEthernet0/0\", \"description\": \"UPLINK\", \"inbound_filter\": \"FIX-IN\", \"edge\": null, \"protected\": false}]",
+   "t": 35.32
+  },
+  {
+   "name": "review_tool",
+   "ok": true,
+   "attempt": null,
+   "detail": "show_config(device=site-a, state=candidate) \u2192 hostname site-a ! vlan 10 name MGMT ! vlan 20 name VOICE ! ip access-list extended EDGE-IN 10 permit tcp any any eq 443 20 deny tcp any any eq telnet 30 perm...",
+   "t": 35.32
+  },
+  {
+   "name": "review_tool",
+   "ok": true,
+   "attempt": null,
+   "detail": "show_config(device=site-b, state=candidate) \u2192 sysname site-b # vlan batch 10 20 # vlan 10 name MGMT # vlan 20 name VOICE # acl number 3000 rule 5 permit tcp destination-port eq 443 rule 10 deny tcp desti...",
+   "t": 35.32
+  },
+  {
+   "name": "review_tool",
+   "ok": true,
+   "attempt": null,
+   "detail": "show_config(device=core, state=candidate) \u2192 hostname core ! vlan 10 name MGMT ! interface GigabitEthernet0/0 description UPLINK ip access-group FIX-IN in ! router ospf 1 network 10.0.0.0 0.0.255.255 ar...",
+   "t": 35.32
+  },
+  {
+   "name": "review",
+   "ok": false,
+   "attempt": null,
+   "detail": "escalate: Policy flows compliant per audit, but core change applies edge filtering to a core UPLINK (OSPF) and uses inconsistent naming; inventory declares no edge_interfaces so scope is ambiguous. [medium] core: GigabitEthernet0/0 description UPLINK with router ospf 1 network 10.0.0.0/16: candidate adds inbound ACL FIX-IN (10 deny 23, 20 deny 445, 30 permit ip any any) to a core uplink, not a WAN edge. Operator asked to fix edge ACLs; applying edge filtering to a core link expands scope to critical routing adjacency. While 30 permit ip any any currently permits OSPF (IP proto 89), this introduces a new filtering point on a core link that was previously unfiltered. [low] core: New ACL named FIX-IN on core vs EDGE-IN on site-a and acl 3000 on site-b. Inconsistent temporary name will confuse next engineer; no cleanup/standardization to declared edge naming.",
+   "t": 51.15
+  },
+  {
+   "name": "explain",
+   "ok": true,
+   "attempt": null,
+   "detail": "risk floor: medium",
+   "t": 58.57
+  }
+ ],
+ "result": {
+  "request": "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed",
+  "reading": null,
+  "investigation": null,
+  "intent": {
+   "change_type": "acl_remediate",
+   "targets": [
+    "site-a",
+    "site-b",
+    "core"
+   ],
+   "params": {
+    "flows": [
+     {
+      "label": "telnet",
+      "protocol": "tcp",
+      "dst_port": 23,
+      "expected": "deny"
+     },
+     {
+      "label": "SMB",
+      "protocol": "tcp",
+      "dst_port": 445,
+      "expected": "deny"
+     },
+     {
+      "label": "HTTPS",
+      "protocol": "tcp",
+      "dst_port": 443,
+      "expected": "permit"
+     }
+    ]
+   },
+   "summary": "Remediate inbound ACLs on all devices to deny telnet and SMB and permit HTTPS."
+  },
+  "attempts": [
+   {
+    "number": 1,
+    "changes": [
+     {
+      "device": "site-a",
+      "vendor": "cisco_ios",
+      "commands": [
+       "ip access-list extended EDGE-IN",
+       " 35 deny tcp any any eq 445"
+      ]
+     },
+     {
+      "device": "site-b",
+      "vendor": "huawei_vrp",
+      "commands": [
+       "acl number 3000",
+       "rule 15 deny tcp destination-port eq 23"
+      ]
+     },
+     {
+      "device": "core",
+      "vendor": "cisco_ios",
+      "commands": [
+       "ip access-list extended FIX-IN",
+       " 10 deny tcp any any eq 23",
+       " 20 deny tcp any any eq 445",
+       " 30 permit ip any any",
+       "interface GigabitEthernet0/0",
+       " ip access-group FIX-IN in"
+      ]
+     }
+    ],
+    "gate": {
+     "verdict": "PASS",
+     "violations": []
+    },
+    "dry_run_errors": []
+   }
+  ],
+  "diffs": {
+   "site-a": "--- running\n+++ candidate\n@@ -11,4 +11,5 @@\n  20 deny tcp any any eq telnet\n  30 permit tcp host 192.0.2.10 any eq 22\n+ 35 deny tcp any any eq 445\n  40 permit ip any any\n !",
+   "site-b": "--- running\n+++ candidate\n@@ -12,4 +12,5 @@\n  rule 5 permit tcp destination-port eq 443\n  rule 10 deny tcp destination-port eq 445\n+ rule 15 deny tcp destination-port eq 23\n #\n interface GigabitEthernet0/0/0",
+   "core": "--- running\n+++ candidate\n@@ -6,7 +6,13 @@\n interface GigabitEthernet0/0\n  description UPLINK\n+ ip access-group FIX-IN in\n !\n router ospf 1\n  network 10.0.0.0 0.0.255.255 area 0\n !\n+ip access-list extended FIX-IN\n+ 10 deny tcp any any eq 23\n+ 20 deny tcp any any eq 445\n+ 30 permit ip any any\n+!\n end"
+  },
+  "findings": [
+   {
+    "device": "site-a",
+    "interface": "GigabitEthernet0/0",
+    "acl": "EDGE-IN",
+    "flow": {
+     "label": "telnet",
+     "protocol": "tcp",
+     "dst_port": 23,
+     "expected": "deny"
+    },
+    "actual": "deny",
+    "matched": "20 deny tcp any any eq telnet"
+   },
+   {
+    "device": "site-a",
+    "interface": "GigabitEthernet0/0",
+    "acl": "EDGE-IN",
+    "flow": {
+     "label": "SMB",
+     "protocol": "tcp",
+     "dst_port": 445,
+     "expected": "deny"
+    },
+    "actual": "permit",
+    "matched": "40 permit ip any any"
+   },
+   {
+    "device": "site-a",
+    "interface": "GigabitEthernet0/0",
+    "acl": "EDGE-IN",
+    "flow": {
+     "label": "HTTPS",
+     "protocol": "tcp",
+     "dst_port": 443,
+     "expected": "permit"
+    },
+    "actual": "permit",
+    "matched": "10 permit tcp any any eq 443"
+   },
+   {
+    "device": "site-b",
+    "interface": "GigabitEthernet0/0/0",
+    "acl": "3000",
+    "flow": {
+     "label": "telnet",
+     "protocol": "tcp",
+     "dst_port": 23,
+     "expected": "deny"
+    },
+    "actual": "permit",
+    "matched": "no rule matched: Huawei traffic-filter default permit"
+   },
+   {
+    "device": "site-b",
+    "interface": "GigabitEthernet0/0/0",
+    "acl": "3000",
+    "flow": {
+     "label": "SMB",
+     "protocol": "tcp",
+     "dst_port": 445,
+     "expected": "deny"
+    },
+    "actual": "deny",
+    "matched": "rule 10 deny tcp destination-port eq 445"
+   },
+   {
+    "device": "site-b",
+    "interface": "GigabitEthernet0/0/0",
+    "acl": "3000",
+    "flow": {
+     "label": "HTTPS",
+     "protocol": "tcp",
+     "dst_port": 443,
+     "expected": "permit"
+    },
+    "actual": "permit",
+    "matched": "rule 5 permit tcp destination-port eq 443"
+   },
+   {
+    "device": "core",
+    "interface": "(all)",
+    "acl": "(none)",
+    "flow": {
+     "label": "telnet",
+     "protocol": "tcp",
+     "dst_port": 23,
+     "expected": "deny"
+    },
+    "actual": "permit",
+    "matched": "no inbound ACL applied on any interface"
+   },
+   {
+    "device": "core",
+    "interface": "(all)",
+    "acl": "(none)",
+    "flow": {
+     "label": "SMB",
+     "protocol": "tcp",
+     "dst_port": 445,
+     "expected": "deny"
+    },
+    "actual": "permit",
+    "matched": "no inbound ACL applied on any interface"
+   },
+   {
+    "device": "core",
+    "interface": "(all)",
+    "acl": "(none)",
+    "flow": {
+     "label": "HTTPS",
+     "protocol": "tcp",
+     "dst_port": 443,
+     "expected": "permit"
+    },
+    "actual": "permit",
+    "matched": "no inbound ACL applied on any interface"
+   }
+  ],
+  "explanation": "site-a (IOS): adds seq 35 deny tcp eq 445; telnet deny and HTTPS via permit ip any already present.\nsite-b (VRP): adds rule 15 deny tcp eq 23; SMB deny and HTTPS permit already present.\ncore (IOS): creates ACL FIX-IN (10 deny 23, 20 deny 445, 30 permit ip any) bound inbound to Gi0/0.\nNOT touched: only flagged interfaces changed; ssh/dns/http/ntp/snmp/bgp/https/rdp/ping unchanged, all flows compliant.\nRisk: MEDIUM \u2013 new inbound filter on previously unfiltered core uplink.\nESCALATE per reviewer: edge filtering applied to core OSPF UPLINK expands scope; inconsistent name FIX-IN vs EDGE-IN/acl 3000, no edge_interfaces defined.",
+  "risk": {
+   "level": "medium",
+   "reasons": [
+    "core: new inbound filter bound to GigabitEthernet0/0",
+    "site-a: filtering rules added",
+    "site-b: filtering rules added",
+    "core: filtering rules added"
+   ]
+  },
+  "review": {
+   "verdict": "escalate",
+   "summary": "Policy flows compliant per audit, but core change applies edge filtering to a core UPLINK (OSPF) and uses inconsistent naming; inventory declares no edge_interfaces so scope is ambiguous.",
+   "concerns": [
+    {
+     "severity": "medium",
+     "device": "core",
+     "text": "GigabitEthernet0/0 description UPLINK with router ospf 1 network 10.0.0.0/16: candidate adds inbound ACL FIX-IN (10 deny 23, 20 deny 445, 30 permit ip any any) to a core uplink, not a WAN edge. Operator asked to fix edge ACLs; applying edge filtering to a core link expands scope to critical routing adjacency. While 30 permit ip any any currently permits OSPF (IP proto 89), this introduces a new filtering point on a core link that was previously unfiltered."
+    },
+    {
+     "severity": "low",
+     "device": "core",
+     "text": "New ACL named FIX-IN on core vs EDGE-IN on site-a and acl 3000 on site-b. Inconsistent temporary name will confuse next engineer; no cleanup/standardization to declared edge naming."
+    }
+   ],
+   "calls": [
+    {
+     "name": "list_devices",
+     "arguments": {
+      "state": "candidate"
+     },
+     "ok": true,
+     "output": "[{\"hostname\": \"site-a\", \"vendor\": \"cisco_ios\", \"live\": false, \"edge_interfaces\": null, \"protected_interfaces\": []}, {\"hostname\": \"site-b\", \"vendor\": \"huawei_vrp\", \"live\": false, \"edge_interfaces\": null, \"protected_interfaces\": []}, {\"hostname\": \"core\", \"vendor\": \"cisco_ios\", \"live\": false, \"edge_interfaces\": null, \"protected_interfaces\": []}]"
+    },
+    {
+     "name": "list_interfaces",
+     "arguments": {
+      "device": "site-a",
+      "state": "candidate"
+     },
+     "ok": true,
+     "output": "[{\"interface\": \"GigabitEthernet0/0\", \"description\": \"WAN\", \"inbound_filter\": \"EDGE-IN\", \"edge\": null, \"protected\": false}, {\"interface\": \"GigabitEthernet0/1\", \"description\": \"\", \"inbound_filter\": null, \"edge\": null, \"protected\": false}]"
+    },
+    {
+     "name": "list_interfaces",
+     "arguments": {
+      "device": "site-b",
+      "state": "candidate"
+     },
+     "ok": true,
+     "output": "[{\"interface\": \"GigabitEthernet0/0/0\", \"description\": \"WAN\", \"inbound_filter\": \"3000\", \"edge\": null, \"protected\": false}, {\"interface\": \"GigabitEthernet0/0/1\", \"description\": \"\", \"inbound_filter\": null, \"edge\": null, \"protected\": false}]"
+    },
+    {
+     "name": "list_interfaces",
+     "arguments": {
+      "device": "core",
+      "state": "candidate"
+     },
+     "ok": true,
+     "output": "[{\"interface\": \"GigabitEthernet0/0\", \"description\": \"UPLINK\", \"inbound_filter\": \"FIX-IN\", \"edge\": null, \"protected\": false}]"
+    },
+    {
+     "name": "show_config",
+     "arguments": {
+      "device": "site-a",
+      "state": "candidate"
+     },
+     "ok": true,
+     "output": "hostname site-a\n!\nvlan 10\n name MGMT\n!\nvlan 20\n name VOICE\n!\nip access-list extended EDGE-IN\n 10 permit tcp any any eq 443\n 20 deny tcp any any eq telnet\n 30 permit tcp host 192.0.2.10 any eq 22\n 35 deny tcp any any eq 445\n 40 permit ip any any\n!\ninterface GigabitEthernet0/0\n description WAN\n ip access-group EDGE-IN in\n!\ninterface GigabitEthernet0/1\n switchport mode access\n switchport access vlan 20\n!\nend\n"
+    },
+    {
+     "name": "show_config",
+     "arguments": {
+      "device": "site-b",
+      "state": "candidate"
+     },
+     "ok": true,
+     "output": "sysname site-b\n#\nvlan batch 10 20\n#\nvlan 10\n name MGMT\n#\nvlan 20\n name VOICE\n#\nacl number 3000\n rule 5 permit tcp destination-port eq 443\n rule 10 deny tcp destination-port eq 445\n rule 15 deny tcp destination-port eq 23\n#\ninterface GigabitEthernet0/0/0\n description WAN\n traffic-filter inbound acl 3000\n#\ninterface GigabitEthernet0/0/1\n port link-type access\n port default vlan 20\n#\nreturn\n"
+    },
+    {
+     "name": "show_config",
+     "arguments": {
+      "device": "core",
+      "state": "candidate"
+     },
+     "ok": true,
+     "output": "hostname core\n!\nvlan 10\n name MGMT\n!\ninterface GigabitEthernet0/0\n description UPLINK\n ip access-group FIX-IN in\n!\nrouter ospf 1\n network 10.0.0.0 0.0.255.255 area 0\n!\nip access-list extended FIX-IN\n 10 deny tcp any any eq 23\n 20 deny tcp any any eq 445\n 30 permit ip any any\n!\nend\n"
+    }
+   ],
+   "model": "meta-models/muse-spark-open-1026 (Baseten \u00b7 open weights)"
+  },
+  "policy": null,
+  "error": ""
+ },
+ "outcome": {
+  "decision": "approved",
+  "change": "6a649dfc3b",
+  "where": "applied to the lab",
+  "rollback": {
+   "site-a": [
+    "ip access-list extended EDGE-IN",
+    " no 35"
+   ],
+   "site-b": [
+    "acl number 3000",
+    " undo rule 15"
+   ],
+   "core": [
+    "interface GigabitEthernet0/0",
+    " no ip access-group FIX-IN in",
+    "no ip access-list extended FIX-IN"
+   ]
+  },
+  "detail": ""
+ }
+}

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NetOps Copilot</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx-2.0.4.min.js"></script>
+  <script src="/static/htmx-ext-sse-2.2.2.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">⌁</span> NetOps Copilot</div>
+    <div class="topbar-right">
+      {% if demo %}
+        <span class="badge badge-warn" title="No API key on this public demo: deterministic stand-in model, private lab per visitor">public demo · offline model</span>
+      {% elif mock %}
+        <span class="badge badge-warn" title="Deterministic stand-in model, no API call">offline mock model</span>
+      {% else %}
+        <span class="badge badge-ok">{{ model_label }}</span>
+      {% endif %}
+      <a class="link" href="/docs">API</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="side">
+      {% if demo %}
+      <section class="panel demo-note small">
+        <strong>Public demo.</strong> Runs here use a deterministic stand-in for Muse Spark (no API
+        key on a public page) on a lab of your own: approve, roll back and reset freely.
+        {% if replays %}The <strong>recordings</strong> below were captured on the real Muse Spark
+        API{% if recorded_live %} and a real Cisco router{% endif %}.{% endif %}
+        <a class="link" href="https://github.com/gokunguru/netops-copilot">Source</a>
+      </section>
+      {% endif %}
+      {% if replays %}
+      <section class="panel">
+        <h2>Recorded on real systems</h2>
+        <ul class="replays">
+          {% for x in replays %}
+            <li><button class="chip" hx-post="/replays/{{ x.name }}" hx-target="#runs" hx-swap="afterbegin"
+                        title="{{ x.request }}">▶ {{ x.title }}</button>
+                <span class="muted small">{{ x.model }} · {{ x.target }} · {{ x.recorded }}</span></li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+      <section class="panel">
+        <h2>Change request</h2>
+        <form hx-post="/runs" hx-target="#runs" hx-swap="afterbegin" hx-encoding="multipart/form-data"
+              hx-on::after-request="if (event.detail.successful) this.reset()">
+          <textarea name="request" rows="4"
+            placeholder="e.g. Create VLAN 40 named cameras on site-b (or attach a photo of the ticket / whiteboard)"></textarea>
+          <label class="upload small muted">Image (optional): ticket screenshot, whiteboard, diagram
+            <input type="file" name="images" accept="image/png,image/jpeg,image/webp" multiple></label>
+          <label class="check small"><input type="checkbox" name="agent" value="1">
+            Investigate first (agent with read-only tools): ask a question or a goal</label>
+          <button class="btn btn-primary" type="submit">Run agent</button>
+        </form>
+        <div class="examples">
+          <span class="muted">Try:</span>
+          {% for ex in examples %}
+            {% if not ex.faulty or mock %}
+            <button class="chip" hx-post="/runs" hx-target="#runs" hx-swap="afterbegin"
+                    hx-vals='{{ {"request": ex.request, "faulty": "1" if ex.faulty else "", "sample": ex.sample or "", "agent": "1" if ex.agent else ""} | tojson }}'
+                    title="{{ ex.request or ('Image: ' ~ ex.sample) }}">{% if ex.sample %}🖼 {% endif %}{{ ex.label }}</button>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Inventory</h2>
+        <ul class="inventory">
+          {% for d in devices %}
+            <li><span class="mono">{{ d.hostname }}</span>
+                <span>{% if d.live %}<span class="badge badge-ok">live</span> {% endif %}<span class="vendor vendor-{{ d.vendor.value }}">{{ d.vendor.value | replace("_", " ") }}</span></span></li>
+          {% endfor %}
+        </ul>
+      </section>
+
+      <section class="panel">
+        <h2>Policies</h2>
+        <div hx-get="/policies" hx-trigger="load, refresh-policies from:body" hx-swap="innerHTML">
+          <p class="muted small">Checking…</p></div>
+      </section>
+
+      <section class="panel">
+        <h2>Change log</h2>
+        {% if journal %}
+          <ul class="journal">
+            {% for e in journal %}
+              <li><span class="pill {{ 'pill-ok' if e.type == 'apply' else 'pill-warn' }}">{{ e.type }}</span>
+                <span class="mono">{{ e.change }}</span>
+                <span class="muted small">{{ e.devices | join(", ") }}</span></li>
+            {% endfor %}
+          </ul>
+          <p class="small {{ '' if journal_ok else 'fail' }}">Hash chain {{ 'intact' if journal_ok else 'BROKEN' }}
+            · <a class="link" href="/api/changes">full journal</a></p>
+        {% else %}
+          <p class="muted small">No change applied yet.</p>
+        {% endif %}
+        <button class="chip" hx-post="/lab/reset" hx-target="this" hx-swap="outerHTML"
+                hx-confirm="Discard every applied change and the journal?">Reset lab</button>
+      </section>
+
+      <section class="panel guarantees">
+        <h2>Guarantees</h2>
+        <ul>
+          <li>Every model output is schema-validated</li>
+          <li>The agent's tools are read-only: it can look, never change</li>
+          <li>An independent reviewer, in a separate session, can only escalate a change to you</li>
+          <li>Text in an image is data, never instructions: what the model reads goes through the same checks</li>
+          <li>Safety gate and dry-run are deterministic: no LLM decides what is safe</li>
+          <li>Nothing is applied without human approval</li>
+          <li>Every change ships with a rollback proven to restore the original</li>
+        </ul>
+      </section>
+    </aside>
+
+    <section id="runs" class="runs">
+      <div class="empty muted">Runs appear here. Pick an example on the left to start.</div>
+    </section>
+  </main>
+</body>
+</html>

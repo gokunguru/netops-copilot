@@ -1,0 +1,287 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default; jobs that need more ask for it explicitly.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  IMAGE: ghcr.io/${{ github.repository }}
+
+# Actions are pinned to full commit SHAs (supply-chain safety); Dependabot keeps them current.
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - name: Lint workflows (actionlint + shellcheck)
+        run: |
+          pip install actionlint-py shellcheck-py
+          actionlint
+          shellcheck .github/scripts/*.sh
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      # Fails under the threshold set in pyproject.toml ([tool.coverage.report] fail_under).
+      - run: pytest -v --cov --cov-report=term --cov-report=xml --junitxml=junit.xml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: |
+            coverage.xml
+            junit.xml
+          retention-days: 14
+
+  security:
+    name: Security scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history: secrets are searched in every commit
+          persist-credentials: false
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[live]" bandit pip-audit
+      - name: Static analysis (bandit)
+        run: bandit -r src
+      - name: Dependency vulnerabilities (pip-audit)
+        run: pip-audit --skip-editable --progress-spinner off
+
+  demo:
+    name: End-to-end demos (offline model)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+
+      - name: VLAN provisioning, multi-vendor
+        run: netops-copilot "Create VLAN 30 named users on site-a and site-b" --mock --yes
+
+      - name: Retry loop catches a destructive change
+        run: |
+          set -o pipefail
+          netops-copilot "Create VLAN 30 named users on site-a" --mock-faulty --yes | tee out.txt
+          grep -q "existing VLAN 20 removed" out.txt
+          grep -q "Attempt 2: gate PASS, dry-run OK" out.txt
+
+      - name: Vision - whiteboard photo and ticket screenshot become validated changes
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/vision
+        run: |
+          set -o pipefail
+          netops-copilot --image src/netops_copilot/web/static/examples/whiteboard.png --mock --yes | tee board.txt
+          grep -q "Request : Create VLAN 40 named CAMERAS on site-b" board.txt
+          grep -q "applied to the lab" board.txt
+          netops-copilot --image src/netops_copilot/web/static/examples/ticket.png --mock --yes --no-review | tee ticket.txt
+          grep -q "acl_remediate" ticket.txt
+
+      - name: Agent - investigates with read-only tools, then proposes only what is needed
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/agent
+        run: |
+          set -o pipefail
+          netops-copilot --agent "Which interfaces have no inbound ACL?" --mock | tee answer.txt
+          grep -q "No change proposed" answer.txt
+          netops-copilot --agent "Is telnet reachable from outside anywhere? Fix it where it is." --mock --yes --no-review | tee agent.txt
+          grep -q "tool  ok  audit_acls" agent.txt
+          grep -q "targets=\['site-b', 'core'\]" agent.txt
+          grep -q "applied to the lab" agent.txt
+
+      - name: Policy as code - drift found (exit 3), enforced, then compliant
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/policy
+        run: |
+          set -o pipefail
+          code=0
+          netops-copilot --check-policies --report drift.md || code=$?
+          test "$code" -eq 3
+          grep -q "fingerprint" drift.md
+          netops-copilot --enforce edge-acl-baseline --mock --yes --no-review | tee enforce.txt
+          grep -q "Risk floor (deterministic): MEDIUM" enforce.txt
+          netops-copilot --enforce standard-vlans --mock --yes
+          netops-copilot --check-policies
+
+      - name: Benchmark harness (offline model) - no unsafe request left auto-approvable
+        run: |
+          netops-copilot-bench --mock --out bench-results
+          cat bench-results/offline-mock-*.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ACL audit flags the lab as non-compliant (exit code 3)
+        run: |
+          code=0
+          netops-copilot "Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs" --mock || code=$?
+          echo "exit code: $code"
+          test "$code" -eq 3
+
+      - name: ACL auto-fix catches the lockout, then the independent reviewer escalates (exit 2)
+        run: |
+          code=0
+          netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --mock-faulty --yes > fix.txt || code=$?
+          cat fix.txt
+          grep -q "collateral change on GigabitEthernet0/0" fix.txt
+          grep -q "Attempt 2: gate PASS, dry-run OK" fix.txt
+          grep -q "Review  : ESCALATE" fix.txt
+          grep -q "never approves an escalated change" fix.txt
+          test "$code" -eq 2
+
+      - name: Closed loop - fix applied, audit compliant, rollback, audit non-compliant again
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/lab
+        run: |
+          set -o pipefail
+          AUDIT="Telnet and SMB must be blocked and HTTPS allowed on all edge ACLs"
+          netops-copilot "Fix the edge ACLs: telnet and SMB must be blocked and HTTPS allowed" --mock --yes --no-review | tee apply.txt
+          change_id=$(grep -oE "Change [0-9a-f]{10}" apply.txt | head -1 | cut -d' ' -f2)
+          netops-copilot "$AUDIT" --mock
+          netops-copilot --rollback "$change_id"
+          code=0
+          netops-copilot "$AUDIT" --mock || code=$?
+          test "$code" -eq 3
+          netops-copilot --history
+          echo "change_id=$change_id" >> "$GITHUB_ENV"
+
+      - name: Generated Ansible playbooks pass ansible-playbook --syntax-check
+        env:
+          NETOPS_STATE_DIR: ${{ runner.temp }}/lab
+        run: |
+          pip install ansible-core
+          ansible-galaxy collection install ansible.netcommon
+          cd "$NETOPS_STATE_DIR/changes/$change_id"
+          ansible-playbook -i inventory.yml --syntax-check playbook.yml
+          ansible-playbook -i inventory.yml --syntax-check rollback.yml
+
+  container:
+    name: Container build, smoke test and scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint, test, security]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: netops-copilot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the running container
+        run: |
+          docker run -d --name app -p 8000:8000 netops-copilot:ci
+          for _ in $(seq 1 30); do
+            curl -sf localhost:8000/healthz && break
+            sleep 1
+          done
+          curl -sf localhost:8000/healthz | grep -q '"status":"ok"'
+          curl -sf localhost:8000/ | grep -q "NetOps Copilot"
+          curl -sf localhost:8000/api/inventory | grep -q "site-b"
+          curl -sf localhost:8000/api/policies | grep -q '"name":"edge-acl-baseline"'
+          curl -sf -X POST localhost:8000/api/runs -H 'content-type: application/json' \
+            -d '{"request": "Create VLAN 30 named users on site-a"}' | grep -q '"ready_for_approval":true'
+          test "$(docker inspect -f '{{.Config.User}}' app)" = "netops"
+
+      - name: Container logs
+        if: failure()
+        run: docker logs app
+
+      - name: Vulnerability scan (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: netops-copilot:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  publish:
+    name: Publish image to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [container, demo]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+      - name: Build and push (with SBOM and provenance)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

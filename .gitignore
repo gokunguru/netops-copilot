@@ -1,0 +1,25 @@
+# Secrets: API keys and device credentials stay local
+.env
+*.key
+*.pem
+
+# Python build and tool caches
+*.egg-info/
+*.py[cod]
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local state of the CLI and the web app (lab copies, journal, change artefacts)
+.netops/
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/

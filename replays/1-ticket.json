@@ -1,0 +1,299 @@
+{
+ "title": "Ticket screenshot to proven ACL fix",
+ "recorded": "2026-11-01 21:22 UTC",
+ "model": "muse-spark-1.3",
+ "target": "lab simulator: Cisco IOS and Huawei VRP config models",
+ "request": "On site-a, site-b and core, fix the edge ACLs to block Telnet and SMB but keep HTTPS allowed for the customer portal, and do not touch anything else.",
+ "duration": 34.7,
+ "steps": [
+  {
+   "name": "read",
+   "ok": true,
+   "attempt": null,
+   "detail": "On site-a, site-b and core, fix the edge ACLs to block Telnet and SMB but keep HTTPS allowed for the customer portal, and do not touch anything else.",
+   "t": 5.47
+  },
+  {
+   "name": "parse",
+   "ok": true,
+   "attempt": null,
+   "detail": "Remediate edge ACLs on site-a, site-b and core to deny Telnet and SMB while permitting HTTPS for the customer portal.",
+   "t": 12.01
+  },
+  {
+   "name": "audit",
+   "ok": false,
+   "attempt": null,
+   "detail": "4 non-compliant, to fix on: site-a, site-b, core",
+   "t": 12.02
+  },
+  {
+   "name": "generate",
+   "ok": true,
+   "attempt": 1,
+   "detail": "site-a: ip access-list extended EDGE-IN | 35 deny tcp any any eq 445; site-b: acl number 3000 | rule 15 deny tcp destination-port eq 23; core: ip access-list extended FIX-Gi0-0-IN | 10 deny tcp any any eq 23 | 20 deny tcp any any eq 445 | 30 permit ip any any | interface GigabitEthernet0/0 | ip access-group FIX-Gi0-0-IN in",
+   "t": 29.34
+  },
+  {
+   "name": "gate",
+   "ok": true,
+   "attempt": 1,
+   "detail": "PASS",
+   "t": 29.35
+  },
+  {
+   "name": "dry_run",
+   "ok": true,
+   "attempt": 1,
+   "detail": "all post-checks passed",
+   "t": 29.36
+  },
+  {
+   "name": "explain",
+   "ok": true,
+   "attempt": null,
+   "detail": "risk floor: medium",
+   "t": 34.64
+  }
+ ],
+ "result": {
+  "request": "On site-a, site-b and core, fix the edge ACLs to block Telnet and SMB but keep HTTPS allowed for the customer portal, and do not touch anything else.",
+  "reading": {
+   "request": "On site-a, site-b and core, fix the edge ACLs to block Telnet and SMB but keep HTTPS allowed for the customer portal, and do not touch anything else.",
+   "seen": "The image shows Change Desk ticket CR-2026-0412 listing site-a, site-b and core, asking to block Telnet and SMB in the edge ACLs while keeping HTTPS allowed.",
+   "confidence": "high",
+   "images": [
+    "ticket.png"
+   ]
+  },
+  "investigation": null,
+  "intent": {
+   "change_type": "acl_remediate",
+   "targets": [
+    "site-a",
+    "site-b",
+    "core"
+   ],
+   "params": {
+    "flows": [
+     {
+      "label": "Telnet",
+      "protocol": "tcp",
+      "dst_port": 23,
+      "expected": "deny"
+     },
+     {
+      "label": "SMB",
+      "protocol": "tcp",
+      "dst_port": 445,
+      "expected": "deny"
+     },
+     {
+      "label": "HTTPS",
+      "protocol": "tcp",
+      "dst_port": 443,
+      "expected": "permit"
+     }
+    ]
+   },
+   "summary": "Remediate edge ACLs on site-a, site-b and core to deny Telnet and SMB while permitting HTTPS for the customer portal."
+  },
+  "attempts": [
+   {
+    "number": 1,
+    "changes": [
+     {
+      "device": "site-a",
+      "vendor": "cisco_ios",
+      "commands": [
+       "ip access-list extended EDGE-IN",
+       " 35 deny tcp any any eq 445"
+      ]
+     },
+     {
+      "device": "site-b",
+      "vendor": "huawei_vrp",
+      "commands": [
+       "acl number 3000",
+       "rule 15 deny tcp destination-port eq 23"
+      ]
+     },
+     {
+      "device": "core",
+      "vendor": "cisco_ios",
+      "commands": [
+       "ip access-list extended FIX-Gi0-0-IN",
+       "10 deny tcp any any eq 23",
+       "20 deny tcp any any eq 445",
+       "30 permit ip any any",
+       "interface GigabitEthernet0/0",
+       "ip access-group FIX-Gi0-0-IN in"
+      ]
+     }
+    ],
+    "gate": {
+     "verdict": "PASS",
+     "violations": []
+    },
+    "dry_run_errors": []
+   }
+  ],
+  "diffs": {
+   "site-a": "--- running\n+++ candidate\n@@ -11,4 +11,5 @@\n  20 deny tcp any any eq telnet\n  30 permit tcp host 192.0.2.10 any eq 22\n+ 35 deny tcp any any eq 445\n  40 permit ip any any\n !",
+   "site-b": "--- running\n+++ candidate\n@@ -12,4 +12,5 @@\n  rule 5 permit tcp destination-port eq 443\n  rule 10 deny tcp destination-port eq 445\n+ rule 15 deny tcp destination-port eq 23\n #\n interface GigabitEthernet0/0/0",
+   "core": "--- running\n+++ candidate\n@@ -6,7 +6,13 @@\n interface GigabitEthernet0/0\n  description UPLINK\n+ ip access-group FIX-Gi0-0-IN in\n !\n router ospf 1\n  network 10.0.0.0 0.0.255.255 area 0\n !\n+ip access-list extended FIX-Gi0-0-IN\n+ 10 deny tcp any any eq 23\n+ 20 deny tcp any any eq 445\n+ 30 permit ip any any\n+!\n end"
+  },
+  "findings": [
+   {
+    "device": "site-a",
+    "interface": "GigabitEthernet0/0",
+    "acl": "EDGE-IN",
+    "flow": {
+     "label": "Telnet",
+     "protocol": "tcp",
+     "dst_port": 23,
+     "expected": "deny"
+    },
+    "actual": "deny",
+    "matched": "20 deny tcp any any eq telnet"
+   },
+   {
+    "device": "site-a",
+    "interface": "GigabitEthernet0/0",
+    "acl": "EDGE-IN",
+    "flow": {
+     "label": "SMB",
+     "protocol": "tcp",
+     "dst_port": 445,
+     "expected": "deny"
+    },
+    "actual": "permit",
+    "matched": "40 permit ip any any"
+   },
+   {
+    "device": "site-a",
+    "interface": "GigabitEthernet0/0",
+    "acl": "EDGE-IN",
+    "flow": {
+     "label": "HTTPS",
+     "protocol": "tcp",
+     "dst_port": 443,
+     "expected": "permit"
+    },
+    "actual": "permit",
+    "matched": "10 permit tcp any any eq 443"
+   },
+   {
+    "device": "site-b",
+    "interface": "GigabitEthernet0/0/0",
+    "acl": "3000",
+    "flow": {
+     "label": "Telnet",
+     "protocol": "tcp",
+     "dst_port": 23,
+     "expected": "deny"
+    },
+    "actual": "permit",
+    "matched": "no rule matched: Huawei traffic-filter default permit"
+   },
+   {
+    "device": "site-b",
+    "interface": "GigabitEthernet0/0/0",
+    "acl": "3000",
+    "flow": {
+     "label": "SMB",
+     "protocol": "tcp",
+     "dst_port": 445,
+     "expected": "deny"
+    },
+    "actual": "deny",
+    "matched": "rule 10 deny tcp destination-port eq 445"
+   },
+   {
+    "device": "site-b",
+    "interface": "GigabitEthernet0/0/0",
+    "acl": "3000",
+    "flow": {
+     "label": "HTTPS",
+     "protocol": "tcp",
+     "dst_port": 443,
+     "expected": "permit"
+    },
+    "actual": "permit",
+    "matched": "rule 5 permit tcp destination-port eq 443"
+   },
+   {
+    "device": "core",
+    "interface": "(all)",
+    "acl": "(none)",
+    "flow": {
+     "label": "Telnet",
+     "protocol": "tcp",
+     "dst_port": 23,
+     "expected": "deny"
+    },
+    "actual": "permit",
+    "matched": "no inbound ACL applied on any interface"
+   },
+   {
+    "device": "core",
+    "interface": "(all)",
+    "acl": "(none)",
+    "flow": {
+     "label": "SMB",
+     "protocol": "tcp",
+     "dst_port": 445,
+     "expected": "deny"
+    },
+    "actual": "permit",
+    "matched": "no inbound ACL applied on any interface"
+   },
+   {
+    "device": "core",
+    "interface": "(all)",
+    "acl": "(none)",
+    "flow": {
+     "label": "HTTPS",
+     "protocol": "tcp",
+     "dst_port": 443,
+     "expected": "permit"
+    },
+    "actual": "permit",
+    "matched": "no inbound ACL applied on any interface"
+   }
+  ],
+  "explanation": "site-a (IOS): adds deny tcp/445; deny telnet already present, HTTPS stays permitted via permit ip any.\nsite-b (VRP): adds deny tcp/23; deny 445 + permit 443 already present.\ncore (IOS): new ACL FIX-Gi0-0-IN inbound on Gi0/0: deny 23, deny 445, permit ip any any.\nNOT touched: all other interfaces/filters unchanged; ssh/dns/http/ntp/snmp/bgp/https/rdp/ping identical.\nRisk: MEDIUM \u2013 new inbound filter bound to core Gi0/0.",
+  "risk": {
+   "level": "medium",
+   "reasons": [
+    "core: new inbound filter bound to GigabitEthernet0/0",
+    "site-a: filtering rules added",
+    "site-b: filtering rules added",
+    "core: filtering rules added"
+   ]
+  },
+  "policy": null,
+  "error": ""
+ },
+ "outcome": {
+  "decision": "approved",
+  "change": "dae24be5b0",
+  "where": "applied to the lab",
+  "rollback": {
+   "site-a": [
+    "ip access-list extended EDGE-IN",
+    " no 35"
+   ],
+   "site-b": [
+    "acl number 3000",
+    " undo rule 15"
+   ],
+   "core": [
+    "interface GigabitEthernet0/0",
+    " no ip access-group FIX-Gi0-0-IN in",
+    "no ip access-list extended FIX-Gi0-0-IN"
+   ]
+  },
+  "detail": ""
+ }
+}
