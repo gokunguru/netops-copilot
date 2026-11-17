@@ -1,6 +1,7 @@
 # NetOps Copilot
 
 [![CI/CD](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/gokunguru/netops-copilot/actions/workflows/ci.yml)
+[![agmi: measured](https://img.shields.io/badge/agmi-measured-0F4C5C)](https://agentmemoryintegrity.org/stores/netops-copilot-journal.html)
 
 > An AI agent that turns plain-language network change requests into validated, multi-vendor configs. A deterministic safety gate and dry-run decide what is safe, a human approves, and every applied change ships with an Ansible playbook, a rollback proven to restore the original, and a tamper-evident journal entry.
 
