@@ -22,6 +22,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Offline model by default: run with -e NETOPS_MOCK=0 -e META_API_KEY=... for Muse Spark.
 # Public demo (private lab per visitor, recorded real runs): -e NETOPS_DEMO=1.
 
+# Apply Debian security updates published since the base image was built
+# (the Trivy gate fails on any fixable HIGH or CRITICAL CVE).
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 10001 netops
 WORKDIR /app
 COPY --from=build /wheels /wheels
