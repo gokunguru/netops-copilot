@@ -21,7 +21,7 @@ def entry(i: int) -> dict:
 
 
 @pytest.fixture
-def secrets_dir(tmp_path):
+def vault(tmp_path):
     folder = tmp_path / "secrets"
     folder.mkdir()
     (folder / "journal.key").write_text(secrets.token_hex(32))
@@ -29,9 +29,9 @@ def secrets_dir(tmp_path):
 
 
 @pytest.fixture
-def keyed(tmp_path, secrets_dir):
-    return changes.Store(tmp_path / "lab", key_file=secrets_dir / "journal.key",
-                         anchor_dir=secrets_dir / "anchors")
+def keyed(tmp_path, vault):
+    return changes.Store(tmp_path / "lab", key_file=vault / "journal.key",
+                         anchor_dir=vault / "anchors")
 
 
 def seeded(store: changes.Store, n: int = 3) -> changes.Store:
@@ -64,30 +64,30 @@ def test_keyed_entries_verify_and_carry_alg_and_epoch(keyed):
     assert json.loads(keyed.anchor_path.read_text())["seq"] == 3
 
 
-def test_key_and_anchor_must_live_outside_the_state_directory(tmp_path, secrets_dir):
+def test_key_and_anchor_must_live_outside_the_state_directory(tmp_path, vault):
     lab = tmp_path / "lab"
     with pytest.raises(changes.ChangeError, match="outside the state directory"):
-        changes.Store(lab, key_file=lab / "journal.key", anchor_dir=secrets_dir)
+        changes.Store(lab, key_file=lab / "journal.key", anchor_dir=vault)
     with pytest.raises(changes.ChangeError, match="outside the state directory"):
-        changes.Store(lab, key_file=secrets_dir / "journal.key", anchor_dir=lab / "anchors")
+        changes.Store(lab, anchor_dir=lab / "anchors", key_file=vault / "journal.key")
 
 
-def test_key_and_anchor_go_together(tmp_path, secrets_dir):
+def test_key_and_anchor_go_together(tmp_path, vault):
     with pytest.raises(changes.ChangeError, match="both"):
-        changes.Store(tmp_path / "lab", key_file=secrets_dir / "journal.key")
+        changes.Store(tmp_path / "lab", key_file=vault / "journal.key")
 
 
-def test_environment_variables_configure_the_keyed_journal(tmp_path, secrets_dir, monkeypatch):
-    monkeypatch.setenv("NETOPS_JOURNAL_KEY_FILE", str(secrets_dir / "journal.key"))
-    monkeypatch.setenv("NETOPS_JOURNAL_ANCHOR_DIR", str(secrets_dir / "anchors"))
+def test_environment_variables_configure_the_keyed_journal(tmp_path, vault, monkeypatch):
+    monkeypatch.setenv("NETOPS_JOURNAL_KEY_FILE", str(vault / "journal.key"))
+    monkeypatch.setenv("NETOPS_JOURNAL_ANCHOR_DIR", str(vault / "anchors"))
     store = seeded(changes.Store(tmp_path / "lab"), 1)
     assert store.keyed and store.journal()[0]["alg"] == "hmac-sha256"
 
 
-def test_short_key_is_refused(tmp_path, secrets_dir):
-    (secrets_dir / "journal.key").write_text("short")
-    store = changes.Store(tmp_path / "lab", key_file=secrets_dir / "journal.key",
-                          anchor_dir=secrets_dir / "anchors")
+def test_short_key_is_refused(tmp_path, vault):
+    (vault / "journal.key").write_text("short")
+    store = changes.Store(tmp_path / "lab", key_file=vault / "journal.key",
+                          anchor_dir=vault / "anchors")
     with pytest.raises(changes.ChangeError, match="too short"):
         store.append(entry(1))
 
@@ -130,9 +130,9 @@ def test_forged_entry_with_a_recomputed_unkeyed_digest_is_refused(keyed):
     assert refused(keyed)
 
 
-def test_entry_copied_from_another_store_is_refused(tmp_path, secrets_dir, keyed):
-    other = seeded(changes.Store(tmp_path / "other", key_file=secrets_dir / "journal.key",
-                                 anchor_dir=secrets_dir / "anchors"))
+def test_entry_copied_from_another_store_is_refused(tmp_path, vault, keyed):
+    other = seeded(changes.Store(tmp_path / "other", key_file=vault / "journal.key",
+                                 anchor_dir=vault / "anchors"))
     journal = lines(seeded(keyed))
     journal[1] = lines(other)[1]
     write(keyed, journal)
