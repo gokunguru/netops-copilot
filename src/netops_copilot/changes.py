@@ -7,10 +7,14 @@ Guarantees, all deterministic:
   proven to restore the original exactly.
 - A change is refused if the lab moved since the run was validated (no stale approvals).
 - Every apply and rollback is appended to a hash-chained journal (tamper-evident).
+  With a journal key and an anchor directory outside the state directory, the chain is keyed
+  (HMAC-SHA256) and its head is anchored off the store: an edited, truncated, forged, rolled
+  back or resurrected journal is refused on read, before any decision is taken from it.
 """
 
 import getpass
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -35,6 +39,10 @@ class ChangeError(Exception):
     pass
 
 
+class JournalIntegrityError(ChangeError):
+    """The keyed journal does not match its key or its anchor: it is not read."""
+
+
 def sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -45,14 +53,118 @@ def operator() -> str:
 
 # ---------------------------------------------------------------- state store
 
-class Store:
-    """Lab state (configs overriding the inventory), change artefacts and the journal."""
+GENESIS = "0" * 64
+KEYED_ALG = "hmac-sha256"
 
-    def __init__(self, root: str | Path | None = None) -> None:
+
+def _inside(path: Path, folder: Path) -> bool:
+    path, folder = path.resolve(), folder.resolve()
+    return path == folder or folder in path.parents
+
+
+class Store:
+    """Lab state (configs overriding the inventory), change artefacts and the journal.
+
+    Unkeyed (default): each journal entry carries a SHA-256 of its content and the previous
+    hash, checked by verify_journal() (the audit). Anyone who can write the state directory
+    can rewrite the chain, so this only catches accidental or careless edits.
+
+    Keyed: set both a key file and an anchor directory, outside the state directory
+    (NETOPS_JOURNAL_KEY_FILE and NETOPS_JOURNAL_ANCHOR_DIR, or the arguments). Each entry is
+    then an HMAC-SHA256 bound to this store and to its epoch, and the head (epoch, seq, hash)
+    is kept in the anchor directory. journal() refuses a journal that does not verify, so a
+    rollback or an apply is never decided from an edited journal.
+    """
+
+    def __init__(self, root: str | Path | None = None, *, key_file: str | Path | None = None,
+                 anchor_dir: str | Path | None = None) -> None:
         self.root = Path(root or os.getenv("NETOPS_STATE_DIR") or Path.cwd() / ".netops")
         self.configs = self.root / "configs"
         self.changes = self.root / "changes"
         self.journal_path = self.root / "journal.jsonl"
+        key_file = key_file or os.getenv("NETOPS_JOURNAL_KEY_FILE") or None
+        anchor_dir = anchor_dir or os.getenv("NETOPS_JOURNAL_ANCHOR_DIR") or None
+        if bool(key_file) != bool(anchor_dir):
+            raise ChangeError("a keyed journal needs both a key file and an anchor directory "
+                              "(NETOPS_JOURNAL_KEY_FILE and NETOPS_JOURNAL_ANCHOR_DIR)")
+        self.key_file = Path(key_file).expanduser() if key_file else None
+        self.anchor_dir = Path(anchor_dir).expanduser() if anchor_dir else None
+        for what, path in (("key file", self.key_file), ("anchor directory", self.anchor_dir)):
+            if path and _inside(path, self.root):
+                raise ChangeError(f"the journal {what} must live outside the state directory "
+                                  f"({path} is inside {self.root})")
+
+    # ---------------------------------------------------------------- keyed journal
+
+    @property
+    def keyed(self) -> bool:
+        return self.key_file is not None
+
+    @property
+    def store_id(self) -> str:
+        """Binds entries and anchor to this state directory (a line copied from another
+        visitor's lab does not verify here)."""
+        return sha(str(self.root.resolve()))
+
+    @property
+    def anchor_path(self) -> Path:
+        return self.anchor_dir / f"{self.store_id[:32]}.json"
+
+    def _key(self) -> bytes:
+        try:
+            key = self.key_file.read_bytes().strip()
+        except OSError as exc:
+            raise ChangeError(f"cannot read the journal key file {self.key_file}: {exc}") from exc
+        if len(key) < 32:
+            raise ChangeError(f"the journal key in {self.key_file} is too short (32 bytes minimum)")
+        return key
+
+    def _mac(self, body: dict) -> str:
+        message = json.dumps({"store": self.store_id, **body}, sort_keys=True).encode()
+        return hmac.new(self._key(), message, hashlib.sha256).hexdigest()
+
+    def _anchor(self) -> dict:
+        """The head as last written by this tool. No anchor yet: an empty journal, epoch 0."""
+        if not self.anchor_path.exists():
+            return {"epoch": 0, "seq": 0, "head": GENESIS}
+        anchor = json.loads(self.anchor_path.read_text())
+        body = {k: v for k, v in anchor.items() if k != "mac"}
+        if not hmac.compare_digest(anchor.get("mac", ""), self._mac({"anchor": body})):
+            raise JournalIntegrityError(f"the journal anchor {self.anchor_path} does not verify")
+        return body
+
+    def _write_anchor(self, epoch: int, seq: int, head: str) -> None:
+        body = {"epoch": epoch, "seq": seq, "head": head}
+        self.anchor_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.anchor_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({**body, "mac": self._mac({"anchor": body})}, sort_keys=True))
+        os.replace(tmp, self.anchor_path)  # atomic: the anchor is never half written
+
+    def _keyed_problem(self, entries: list[dict]) -> str | None:
+        """Why a keyed journal must not be trusted, or None when it verifies."""
+        anchor = self._anchor()
+        prev = GENESIS
+        for i, entry in enumerate(entries, start=1):
+            body = {k: v for k, v in entry.items() if k != "hash"}
+            if entry.get("alg") != KEYED_ALG:
+                return f"entry {i} is not keyed"
+            if entry.get("seq") != i:
+                return f"entry {i} is out of sequence"
+            if entry.get("epoch") != anchor["epoch"]:
+                return f"entry {i} belongs to another epoch of this journal (erased since)"
+            if entry["prev"] != prev:
+                return f"entry {i} does not follow the previous one"
+            if not hmac.compare_digest(entry["hash"], self._mac(body)):
+                return f"entry {i} does not verify against the journal key"
+            prev = entry["hash"]
+        # The head must be the anchored one. The journal may be one entry ahead: the tool
+        # writes the line, then the anchor, and only the key holder can write a valid line.
+        if (len(entries), prev) == (anchor["seq"], anchor["head"]):
+            return None
+        if len(entries) == anchor["seq"] + 1 and entries[-1]["prev"] == anchor["head"]:
+            return None
+        return (f"the journal ends at entry {len(entries)}, the anchor at entry {anchor['seq']}: "
+                "truncated, rolled back or replaced")
 
     def config(self, host: str) -> str | None:
         path = self.configs / f"{host}.cfg"
@@ -62,24 +174,50 @@ class Store:
         self.configs.mkdir(parents=True, exist_ok=True)
         (self.configs / f"{host}.cfg").write_text(text)
 
-    def journal(self) -> list[dict]:
+    def _entries(self) -> list[dict]:
         if not self.journal_path.exists():
             return []
         return [json.loads(line) for line in self.journal_path.read_text().splitlines() if line]
 
+    def journal(self) -> list[dict]:
+        """The journal, as decisions are taken from it. Keyed: refused unless it verifies."""
+        entries = self._entries()
+        if self.keyed and (problem := self._keyed_problem(entries)):
+            raise JournalIntegrityError(f"change journal refused: {problem}")
+        return entries
+
+    def history(self) -> tuple[list[dict], bool]:
+        """The entries for display, and whether the journal verifies (never raises)."""
+        try:
+            entries = self._entries()
+        except ValueError:
+            return [], False
+        return entries, self.verify_journal()
+
     def append(self, entry: dict) -> dict:
         entries = self.journal()
         entry = {"seq": len(entries) + 1, "time": datetime.now(UTC).isoformat(timespec="seconds"),
-                 **entry, "prev": entries[-1]["hash"] if entries else "0" * 64}
-        entry["hash"] = sha(json.dumps(entry, sort_keys=True))
+                 **entry, "prev": entries[-1]["hash"] if entries else GENESIS}
+        if self.keyed:
+            entry |= {"alg": KEYED_ALG, "epoch": self._anchor()["epoch"]}
+            entry["hash"] = self._mac(entry)
+        else:
+            entry["hash"] = sha(json.dumps(entry, sort_keys=True))
         self.root.mkdir(parents=True, exist_ok=True)
         with self.journal_path.open("a") as f:
             f.write(json.dumps(entry, sort_keys=True) + "\n")
+        if self.keyed:
+            self._write_anchor(entry["epoch"], entry["seq"], entry["hash"])
         return entry
 
     def verify_journal(self) -> bool:
-        prev = "0" * 64
-        for entry in self.journal():
+        if self.keyed:
+            try:
+                return self._keyed_problem(self._entries()) is None
+            except (ChangeError, ValueError, KeyError, TypeError):
+                return False
+        prev = GENESIS
+        for entry in self._entries():
             body = {k: v for k, v in entry.items() if k != "hash"}
             if entry["prev"] != prev or sha(json.dumps(body, sort_keys=True)) != entry["hash"]:
                 return False
@@ -101,7 +239,11 @@ class Store:
         return (self.changes / change_id / name).read_text()
 
     def reset(self) -> None:
+        epoch = self._anchor()["epoch"] if self.keyed else 0
         shutil.rmtree(self.root, ignore_errors=True)
+        if self.keyed:
+            # A new epoch: a copy of the erased journal restored later no longer verifies.
+            self._write_anchor(epoch + 1, 0, GENESIS)
 
 
 # ---------------------------------------------------------------- rollback

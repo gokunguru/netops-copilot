@@ -427,6 +427,15 @@ Change 30bff67275 applied to the lab by kamil (journal #1).
 - **No stale approvals**: if the lab changed between the run and the approval, the change is refused. Same for a rollback over a later change.
 - **Ansible artefacts**: `playbook.yml`, `rollback.yml` and `inventory.yml` per change, using `ansible.netcommon.cli_config` with a backup of the running config first. CI checks them with `ansible-playbook --syntax-check`. Cisco hosts use `cisco.ios`; Huawei hosts use `community.network.ce`, which is no longer bundled with Ansible (`ansible-galaxy collection install community.network`).
 - **Tamper-evident journal**: every apply and rollback is appended to `journal.jsonl`, each entry hashing the previous one. `--history` and `/api/changes` check the chain.
+- **Keyed journal, anchored head** (optional): an unkeyed hash chain only catches careless edits, since anyone who can write the state directory can recompute it ([measured with agmi](https://agentmemoryintegrity.org/stores/netops-copilot-journal.html)). Point `NETOPS_JOURNAL_KEY_FILE` at a key (32 bytes or more) and `NETOPS_JOURNAL_ANCHOR_DIR` at a folder, both outside the state directory, and each entry becomes an HMAC-SHA256 bound to this lab and to its epoch, while the head (epoch, entry number, hash) is kept in the anchor folder. The journal is then checked on every read: an edited, deleted, reordered, forged, truncated, rolled-back or resurrected journal is refused, and no apply or rollback is decided from it. `--history` still lists the entries and reports `BROKEN`.
+
+  ```bash
+  mkdir -p ~/.netops-secrets && python -c "import secrets; print(secrets.token_hex(32))" > ~/.netops-secrets/journal.key
+  chmod 600 ~/.netops-secrets/journal.key
+  export NETOPS_JOURNAL_KEY_FILE=~/.netops-secrets/journal.key NETOPS_JOURNAL_ANCHOR_DIR=~/.netops-secrets/anchors
+  ```
+
+  Start a keyed journal on a fresh state directory (`--reset-lab`): entries written without the key do not verify under it.
 
 The same actions are in the web UI (Approve, playbook / rollback / inventory downloads, Roll back, change log, Reset lab) and in the API (`GET /api/changes`).
 

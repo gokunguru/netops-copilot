@@ -127,6 +127,12 @@ def sse(event: str, data: str) -> str:
     return f"event: {event}\n" + "".join(f"data: {line}\n" for line in lines) + "\n"
 
 
+def _journal_view(store: changes.Store) -> dict:
+    """The last journal entries for the page, and whether the journal verifies."""
+    entries, ok = store.history()
+    return {"journal": list(reversed(entries))[:6], "journal_ok": ok}
+
+
 def create_app(mock: bool | None = None, inventory: str | Path | None = None,
                step_delay: float | None = None, max_retries: int = 3,
                state_dir: str | Path | None = None,
@@ -169,7 +175,7 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
         while len(runs) > MAX_RUNS:
             runs.pop(next(iter(runs)))
 
-    app = FastAPI(title="NetOps Copilot", version="0.1.0",
+    app = FastAPI(title="NetOps Copilot", version="0.2.0",
                   description="AI agent for validated multi-vendor network changes.")
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     if demo:
@@ -207,7 +213,7 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
             "examples": EXAMPLES, "mock": mock, "demo": demo, "model_label": model_label,
             "devices": devices(st, live=False).values(), "replays": recorded,
             "recorded_live": any("over SSH" in x.target for x in recorded),
-            "journal": list(reversed(st.journal()))[:6], "journal_ok": st.verify_journal()})
+            **_journal_view(st)})
 
     @app.post("/runs", response_class=HTMLResponse)
     async def create_run(http: Request, request: str = Form(""), faulty: str = Form(""),
@@ -444,8 +450,8 @@ def create_app(mock: bool | None = None, inventory: str | Path | None = None,
     @app.get("/api/changes", tags=["api"])
     def api_changes(http: Request) -> dict:
         """The change journal, oldest first, and whether its hash chain is intact."""
-        st = store_of(http)
-        return {"entries": st.journal(), "integrity_ok": st.verify_journal()}
+        entries, ok = store_of(http).history()
+        return {"entries": entries, "integrity_ok": ok}
 
     @app.get("/api/replays", tags=["api"])
     def api_replays() -> list[dict]:

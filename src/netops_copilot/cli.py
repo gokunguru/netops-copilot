@@ -76,15 +76,16 @@ def render(result: RunResult) -> str:
 
 
 def print_history(store) -> int:
-    entries = store.journal()
-    if not entries:
+    entries, ok = store.history()
+    if not entries and ok:
         print("No change applied to the lab yet.")
         return 0
     for e in entries:
         print(f"#{e['seq']:<3} {e['time']}  {e['type']:<9} {e['change']}  by {e['operator']:<12} "
               f"{', '.join(e['devices'])}  \"{e['request']}\"")
-    print(f"\nJournal integrity (hash chain): {'OK' if store.verify_journal() else 'BROKEN'}")
-    return 0 if store.verify_journal() else 5
+    chain = "keyed hash chain, anchored head" if store.keyed else "hash chain"
+    print(f"\nJournal integrity ({chain}): {'OK' if ok else 'BROKEN'}")
+    return 0 if ok else 5
 
 
 def probe(inventory: str) -> int:
